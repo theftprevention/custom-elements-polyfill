@@ -1,0 +1,23 @@
+{
+    "name": "custom-elements-polyfill",
+    "version": "0.9.0",
+    "description": "A polyfill for window.customElements that conforms to the custom elements v1 specification and works in IE11 and above.",
+    "license": "MIT",
+    "author": {
+        "name": "Jacob McCollum",
+        "email": "jacob@jacobmccollum.com",
+        "url": "http://www.jacobmccollum.com"
+    },
+    "homepage": "https://github.com/theftprevention/custom-elements-polyfill",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/theftprevention/custom-elements-polyfill.git"
+    },
+    "bugs": {
+        "url": "https://github.com/theftprevention/custom-elements-polyfill/issues"
+    },
+    "dependencies": { },
+    "devDependencies": {
+        "selenium-webdriver": "^3.4.0"
+    }
+}
