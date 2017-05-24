@@ -19,7 +19,10 @@
   "dependencies": {},
   "devDependencies": {
     "selenium-webdriver": "^3.4.0",
-    "through2": "^2.0.3",
     "uglify-js": "^3.0.11"
+  },
+  "scripts": {
+    "build": "node build/build.js",
+    "test": "node test/test-selenium.js"
   }
 }

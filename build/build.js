@@ -1,7 +1,6 @@
 const
     fs = require('fs'),
     path = require('path'),
-    through = require('through2'),
     minify = require('uglify-js').minify;
 
 const
@@ -15,7 +14,7 @@ var root = path.join(process.mainModule.filename, '../../'),
     min = minify(dist, { warnings: true });
 
 if (min.error) {
-    console.error(min.error);
+    throw min.error;
 } else if (min.warnings && min.warnings.length > 0) {
     console.warn(min.warnings);
 }
