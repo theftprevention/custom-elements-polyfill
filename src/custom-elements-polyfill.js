@@ -241,7 +241,7 @@
         copyProperties = function copyProperties(from, to) {
             var toDescriptors = {},
                 fromDescriptors = getOwnPropertyDescriptors(from),
-                name, hasOwn, toDescriptor;
+                hasOwn, toDescriptor;
             for (var name in fromDescriptors) {
                 if (name !== 'arguments' && name !== 'caller' && name !== 'length' && name !== 'prototype' && hasOwnProperty(fromDescriptors, name)) {
                     hasOwn = hasOwnProperty(to, name);
@@ -356,12 +356,11 @@
                 HTMLUListElement: 'ul',
                 HTMLUnknownElement: null
             },
-            comparisonInterface = (HTMLUnknownElement || HTMLElement).prototype,
-            n = 0;
+            comparisonInterface = (HTMLUnknownElement || HTMLElement).prototype;
 
         getOwnPropertyNames(global).forEach(function (name) {
             var match = reg_htmlInterface.exec(name),
-                interf, proto, tags, isPredefined, element;
+                interf, tags, isPredefined, element, i, l;
             if (!match) {
                 return;
             }
@@ -386,14 +385,15 @@
                 return;
             }
             if (!isPredefined) {
-                for (var i = tags.length - 1; i >= 0; i--) {
+                i = tags.length;
+                while (i--) {
                     element = Document_createElementNS.call(document, HTML_NAMESPACE, tags[i]);
                     if (getPrototypeOf(element) === comparisonInterface) {
                         tags.pop();
                     }
                 }
             }
-            for (var i = 0, l = tags.length; i < l; i++) {
+            for (i = 0, l = tags.length; i < l; i++) {
                 elementConstructorsByTagName[tags[i]] = interf;
             }
         });
@@ -474,7 +474,7 @@
          */
         function ConstructorProxy(constructor, finalConstructor, name, isElementInterface) {
             
-            var constructorBody, hasBase, baseConstructor, basePrototype, proxy, prototype, declarationBody, source;
+            var constructorBody, hasBase, baseConstructor, basePrototype, prototype, declarationBody, source;
             
             this.originalConstructor = constructor;
             this.name = name || getConstructorName(constructor);
@@ -516,28 +516,6 @@
                 }
                 this.baseProxy = getOrCreateProxy(baseConstructor);
                 baseConstructor = this.baseProxy.finalConstructor;
-                //if (this.isClass) {
-                //    this.baseConstructor = basePrototype.constructor;
-                //    if (typeof this.baseConstructor !== 'function' || this.baseConstructor.prototype !== basePrototype) {
-                //        this.baseConstructor = function () { };
-                //        this.baseConstructor.prototype = basePrototype;
-                //    }
-                //    this.baseProxy = getOrCreateProxy(this.baseConstructor);
-                //} else {
-                //    prototype = basePrototype;
-                //    while (prototype != null && prototype !== ObjectProto) {
-                //        proxy = proxies.get(prototype);
-                //        if (proxy && proxy.isElementInterface) {
-                //            this.baseProxy = proxy;
-                //            break;
-                //        }
-                //        prototype = getPrototypeOf(prototype);
-                //    }
-                //}
-                //if (this.baseProxy) {
-                //    this.baseConstructor = this.baseProxy.finalConstructor;
-                //    this.baseIsClass = this.baseProxy.isClass;
-                //}
             }
 
             prototype = constructor.prototype;
@@ -782,7 +760,7 @@
             usingReactionApi = false,
             supportsUnicodeFlag = (function detectUnicodeFlagSupport() {
                 try {
-                    var a = new RegExp('1', 'u');
+                    new RegExp('1', 'u');
                     return true;
                 } catch (ex) {
                     return false;
@@ -800,10 +778,7 @@
                 }
             })(),
             ArrayProto = Array.prototype,
-            Array_join = ArrayProto.join,
             Array_shift = ArrayProto.shift,
-            Array_slice = ArrayProto.slice,
-            Document_get_documentElement = getOwnPropertyDescriptor(DocumentProto, 'documentElement').get,
             elementTypeWithChildrenProperty = hasOwnProperty(ElementProto, 'children') ? Element : HTMLElement,
             Node_get_childNodes = getOwnPropertyDescriptor(NodeProto, 'childNodes').get,
             Node_get_firstChild = getOwnPropertyDescriptor(NodeProto, 'firstChild').get,
@@ -823,10 +798,8 @@
             Element_get_children = getOwnPropertyDescriptor(elementTypeWithChildrenProperty.prototype, 'children').get,
             Element_get_localName = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'localName') ? ElementProto : NodeProto, 'localName').get,
             Element_get_namespaceURI = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'namespaceURI') ? ElementProto : NodeProto, 'namespaceURI').get,
-            Element_get_prefix = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'prefix') ? ElementProto : NodeProto, 'prefix').get,
             String = global.String,
             String_split = String.prototype.split,
-            String_trim = String.prototype.trim,
             currentElementIsSynchronous = false,
             mainDocumentReady = false,
             shim;
@@ -838,7 +811,7 @@
                         return false;
                     }
                     try {
-                        var e = new DOMException('', 'SyntaxError');
+                        new DOMException('', 'SyntaxError');
                     } catch (e) {
                         return false;
                     }
@@ -1988,7 +1961,7 @@
              * @param {Array} [args] - An optional array of arguments to send to the callback.
              */
             function enqueueCallbackReaction(element, callbackName, args) {
-                var props, definition, callbacks, callback, ownerDocument, attributeName, adoptedCallback;
+                var props, definition, callbacks, callback, ownerDocument, attributeName;
 
                 if (!reactionsEnabled) {
                     return;
@@ -3212,7 +3185,7 @@
             function cloneNode(node, doc, deep, nodeType) {
                 // 'nodeType' may be passed as an optimization to skip the 'instanceof HTMLElement'
                 // test if we've already checked its nodeType (and verified that it is not 1).
-                var localName, namespace, is, definition, copy, attributes, children, i, l, child,
+                var localName, namespace, is, definition, copy, attributes, children, i, l,
                     couldBeElement = (nodeType == null || nodeType === 1),
                     isHtmlElement = couldBeElement ? node instanceof HTMLElement : false,
                     isElement = isHtmlElement ? true : (nodeType === 1 ? true : (couldBeElement ? node instanceof Element : false)),
@@ -3460,7 +3433,7 @@
                     i = 1,
                     members = [],
                     m = 0,
-                    target, arg, member, j, k;
+                    target, arg, member;
 
                 if (l < 2) {
                     return;
@@ -3837,6 +3810,10 @@
                 support: {
                     enumerable: true,
                     value: support
+                },
+                version: {
+                    enumerable: true,
+                    value: '{VERSION_PLACEHOLDER}'
                 }
             });
 
