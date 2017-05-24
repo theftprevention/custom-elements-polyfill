@@ -1,5 +1,7 @@
 const
-    webdriver = require('selenium-webdriver');
+    webdriver = require('selenium-webdriver'),
+    by = webdriver.By,
+    until = webdriver.until;
 
 const
     username = process.env.SAUCE_USERNAME,
@@ -25,9 +27,14 @@ if (useSauceConnect) {
         .build();
 
     browser.get('http://localhost:8000/test/index.html').then(function () {
-        browser.getTitle().then(function (title) {
-            console.log('Page title: "' + title + '"');
-        });
+        return browser.wait(until.elementLocated(by.id('results')), 80000);
+    }).then(function (resultContainer) {
+        return resultContainer.getText();
+    }).then(function (resultText) {
+        console.log('Results:')
+        console.log(resultText);
+
+        browser.quit();
     });
 
 }

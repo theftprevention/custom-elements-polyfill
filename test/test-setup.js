@@ -213,7 +213,8 @@
 
         definitions[name] = this;
         if (localName !== 'body' && localName !== 'head' && localName !== 'html') {
-            document.write('<' + localName + (localName === name ? '' : ' is="' + name + '"') + (empty ? ' />' : '></' + localName + '>'));
+            document.body.appendChild(document.createElement(localName));
+            //document.write('<' + localName + (localName === name ? '' : ' is="' + name + '"') + (empty ? ' />' : '></' + localName + '>'));
         }
     }
 
@@ -318,8 +319,18 @@
 
     runner = mocha.run();
     runner.on('end', function () {
-        global.mochaResults = runner.stats;
-        global.mochaResults.reports = reports;
+
+        var results = runner.stats,
+            resultContainer = document.createElement('pre');
+
+        results.reports = reports;
+
+        global.mochaResults = results;
+
+        resultContainer.id = 'results';
+        resultContainer.appendChild(document.createTextNode(JSON.stringify(results)));
+
+        document.body.appendChild(resultContainer);
 
         console.log(global.mochaResults);
     });
