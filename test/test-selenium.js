@@ -30,7 +30,7 @@ const whenJobsCompleted = (function () {
             method: 'POST',
             path: ':username/js-tests/status',
             data: {
-                'js tests': jobIds
+                'js tests': runningJobIds
             }
         }, function (err, response) {
             var jobs, job, id, i, j, k, l;
@@ -136,11 +136,15 @@ if (sauce) {
         data: {
             url: 'http://localhost:8000/test/index.html',
             platforms: [
-                ['Windows 7', 'chrome', '58']
+                ['Windows 7', 'internet explorer', '11'],
+                ['Windows 10', 'chrome', '58'],
+                ['Linux', 'opera', '12.15']
             ],
             framework: 'mocha',
             'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
-            build: process.env.TRAVIS_BUILD_NUMBER
+            build: process.env.TRAVIS_BUILD_NUMBER,
+            recordScreenshots: false,
+            recordVideo: false
         }
     }, function (err, response) {
         var newJobIds, i, j, l;

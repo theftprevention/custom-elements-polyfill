@@ -76,15 +76,15 @@
 
     /**
      * @param {Mocha.Test} test
-     * @returns {Array.<string>}
+     * @returns {string}
      */
     function flattenTitles(test) {
-        var titles = [];
+        var titles = [test.title];
         while (test.parent && test.parent.title) {
             titles.push(test.parent.title);
             test = test.parent;
         }
-        return titles.reverse();
+        return titles.reverse().join(' ');
     };
 
     /**
@@ -135,13 +135,18 @@
     function logResult(test, err) {
         var passed = !err,
             result = {
-                message: passed ? 'passed' : (err ? err.message : ''),
-                name: test.title,
-                result: passed,
-                titles: flattenTitles(test)
+                name: flattenTitles(test),
+                result: passed
             };
-        if (!passed) {
-            result.stack = err.stack;
+        if (!passed && err) {
+            if (err.message) {
+                result.message = err.message;
+            } else {
+                result.message = String(err);
+            }
+            if (result.stack) {
+                result.stack = err.stack;
+            }
         }
         reports.push(result);
     }
