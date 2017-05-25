@@ -6,6 +6,7 @@ const
 
 const
     checkInterval = 5000,
+    checkIntervalSeconds = checkInterval / 1000,
     checkLimit = 12,
     sauceApiUrl = 'https://saucelabs.com/rest/v1/',
     completedJobs = [],
@@ -21,6 +22,11 @@ const whenJobsCompleted = (function () {
 
     var resolve, reject, promise;
 
+    function scheduleJobCheck() {
+        console.log('Launching status request ' + (checkCount + 1) + ' of ' + checkLimit + ' in ' + checkIntervalSeconds + ' second' + (checkIntervalSeconds === 1 ? '' : 's') + '.');
+        setTimeout(checkJobs, checkInterval);
+    }
+
     function checkJobs() {
 
         checkCount++;
@@ -33,7 +39,6 @@ const whenJobsCompleted = (function () {
                 'js tests': runningJobIds
             }
         }, function (err, response) {
-            var jobs, job, i, j, k, l;
             if (err) {
                 return reject(err);
             }
@@ -45,32 +50,14 @@ const whenJobsCompleted = (function () {
             console.log('  => ' + JSON.stringify(response));
 
             if (response && typeof response.completed === 'boolean') {
-                jobs = response['js tests'] instanceof Array ? response['js tests'] : [];
-                for (i = 0, l = jobs.length, k = completedJobs.length; i < l; i++) {
-                    job = jobs[i];
-                    if (job instanceof Object && job.result && job.result.pending === 0) {
-                        j = runningJobIds.length;
-                        while (j--) {
-                            if (runningJobIds[j] === job.id) {
-                                runningJobIds.splice(j, 1);
-                                completedJobs[k++] = job;
-                                break;
-                            }
-                        }
-                    }
-                }
-                l = completedJobs.length;
-                if (l === 0) {
-                    console.log('All jobs complete.');
-                    resolve();
+                if (response.completed) {
+                    console.log('All jobs completed.');
+                    resolve(response['js tests']);
                 } else {
-                    k = checkInterval / 1000;
-                    console.log(l + ' job' + (l === 1 ? '' : 's') + ' still in progress.');
+                    console.log('Some jobs are still in progress.');
                     if (checkCount < checkLimit) {
-                        console.log('Launching status request ' + (checkCount + 1) + ' in ' + k + ' second' + (k === 1 ? '' : 's') + '.');
-                        setTimeout(checkJobs, checkInterval);
+                        scheduleJobCheck();
                     } else {
-                        console.log('Status request limit reached.');
                         reject(new Error('Status request limit reached.'));
                     }
                 }
@@ -89,7 +76,7 @@ const whenJobsCompleted = (function () {
                 resolve = res;
                 reject = rej;
             });
-            setTimeout(checkJobs, checkInterval);
+            scheduleJobCheck();
         }
         return promise;
     };
@@ -125,8 +112,6 @@ if (sauce) {
     //
     //    browser.quit();
     //});
-
-    console.log('Starting manual browser tests');
     
     sauce.send({
         method: 'POST',
@@ -171,7 +156,5 @@ if (sauce) {
             console.log('Done! Terminating script.');
         });
     });
-
-    console.log('End of script');
 
 }
