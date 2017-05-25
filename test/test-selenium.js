@@ -11,7 +11,7 @@ const
 
 var browser;
 
-if (useSauceConnect) {
+if (sauce) {
 
     console.log('Using Sauce Connect.');
     console.log('Travis Job Number:   ' + process.env.TRAVIS_JOB_NUMBER);
