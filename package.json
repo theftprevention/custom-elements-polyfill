@@ -18,6 +18,7 @@
   },
   "dependencies": {},
   "devDependencies": {
+    "saucelabs": "^1.4.0",
     "selenium-webdriver": "^3.4.0",
     "uglify-js": "^3.0.11"
   },

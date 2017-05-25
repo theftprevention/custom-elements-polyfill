@@ -18,6 +18,7 @@
     var api = {},
         builtInElements = {},
         comparisonInterface = (HTMLUnknownElement || HTMLElement).prototype,
+        container = document.getElementById('test-container'),
         createElement = Document.prototype.createElement.bind(document),
         definitions = {},
         descriptors = {},

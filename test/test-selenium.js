@@ -1,4 +1,5 @@
 const
+    SauceLabs = require('saucelabs'),
     webdriver = require('selenium-webdriver'),
     by = webdriver.By,
     until = webdriver.until;
@@ -6,7 +7,7 @@ const
 const
     username = process.env.SAUCE_USERNAME,
     accessKey = process.env.SAUCE_ACCESS_KEY,
-    useSauceConnect = Boolean(username && accessKey);
+    sauce = (username && accessKey) ? new SauceLabs({ username: username, password: accessKey }) : null;
 
 var browser;
 
@@ -26,7 +27,10 @@ if (useSauceConnect) {
         }))
         .build();
 
-    browser.get('http://localhost:8000/test/index.html').then(function () {
+    browser.getSession().then(function (session) {
+        console.log('Session ID is ' + (session && typeof session.getId === 'function' ? '"' + session.getId() + '"' : 'unavailable') + '.');
+        return browser.get('http://localhost:8000/test/index.html');
+    }).then(function () {
         return browser.wait(until.elementLocated(by.id('results')), 80000);
     }).then(function (resultContainer) {
         return resultContainer.getText();
@@ -36,5 +40,7 @@ if (useSauceConnect) {
 
         browser.quit();
     });
+
+    console.log('End of script');
 
 }
