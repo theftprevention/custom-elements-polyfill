@@ -46,11 +46,13 @@ if (sauce) {
         method: 'POST',
         path: ':username/js-tests',
         data: {
-            url: 'http://www.jacobmccollum.com/custom-elements-polyfill/',
+            url: 'http://localhost:8000/test/index.html',
             platforms: [
                 ['Windows 7', 'chrome', '58']
             ],
-            framework: 'mocha'
+            framework: 'mocha',
+            'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
+            build: process.env.TRAVIS_BUILD_NUMBER
         }
     }, function (err, response) {
         if (err) {
