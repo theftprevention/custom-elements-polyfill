@@ -159,11 +159,11 @@ if (sauce) {
         } else {
             newJobIds = [];
         }
-        for (i = 0, j = runningJobs.length, l = newJobIds.length; i < l; i++) {
-            runningJobs[j++] = newJobIds[i];
+        for (i = 0, j = runningJobIds.length, l = newJobIds.length; i < l; i++) {
+            runningJobIds[j++] = newJobIds[i];
         }
 
-        console.log('All running jobs: ' + JSON.stringify(runningJobs));
+        console.log('All running jobs: ' + JSON.stringify(runningJobIds));
 
         whenJobsCompleted().then(function () {
             console.log('Done! Terminating script.');
