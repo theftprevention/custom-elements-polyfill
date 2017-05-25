@@ -5,11 +5,98 @@ const
     until = webdriver.until;
 
 const
+    checkInterval = 5000,
+    checkLimit = 12,
+    sauceApiUrl = 'https://saucelabs.com/rest/v1/',
+    completedJobs = [],
+    runningJobIds = [],
     username = process.env.SAUCE_USERNAME,
     accessKey = process.env.SAUCE_ACCESS_KEY,
     sauce = (username && accessKey) ? new SauceLabs({ username: username, password: accessKey }) : null;
 
-var browser;
+var checkCount = 0,
+    browser;
+
+const whenJobsCompleted = (function () {
+
+    var resolve, reject, promise;
+
+    function checkJobs() {
+
+        checkCount++;
+        console.log('Launching status request ' + checkCount + ' of ' + checkLimit + '.');
+
+        sauce.send({
+            method: 'POST',
+            path: ':username/js-tests/status',
+            data: {
+                'js tests': jobIds
+            }
+        }, function (err, response) {
+            var jobs, job, id, i, j, k, l;
+            if (err) {
+                return reject(err);
+            }
+            if (typeof response === 'string') {
+                response = JSON.parse(response);
+            }
+
+            console.log('POST ' + sauceApiUrl + ':username/js-tests/status');
+            console.log('  => ' + JSON.stringify(response));
+
+            if (response && typeof response.complete === 'boolean') {
+                jobs = response['js tests'] instanceof Array ? response['js tests'] : [];
+                for (i = 0, l = jobs.length, k = completedJobs.length; i < l; i++) {
+                    job = jobs[i];
+                    if (job instanceof Object && job.result && job.result.pending === 0) {
+                        id = job.job_id;
+                        j = runningJobIds.length;
+                        while (j--) {
+                            if (runningJobIds[j] === id) {
+                                console.log('Removing completed job ID: "' + id + '"');
+                                runningJobIds.splice(j, 1);
+                                completedJobs[k++] = job;
+                                break;
+                            }
+                        }
+                    }
+                }
+                l = completedJobs.length;
+                if (l === 0) {
+                    console.log('All jobs complete.');
+                    resolve();
+                } else {
+                    k = checkInterval / 1000;
+                    console.log(l + ' job' + (l === 1 ? '' : 's') + ' still in progress.');
+                    if (checkCount < checkLimit) {
+                        console.log('Launching status request ' + (checkCount + 1) + ' in ' + k + ' second' + (k === 1 ? '' : 's') + '.');
+                        setTimeout(checkJobs, checkInterval);
+                    } else {
+                        console.log('Status request limit reached.');
+                        reject(new Error('Status request limit reached.'));
+                    }
+                }
+            } else {
+                reject(new Error('Could not parse API response.'));
+            }
+        });
+    }
+
+    /**
+     * @returns {Promise}
+     */
+    return function whenJobsCompleted() {
+        if (!promise) {
+            promise = new Promise(function (res, rej) {
+                resolve = res;
+                reject = rej;
+            });
+            setTimeout(checkJobs, checkInterval);
+        }
+        return promise;
+    };
+
+})();
 
 if (sauce) {
 
@@ -42,6 +129,7 @@ if (sauce) {
     //});
 
     console.log('Starting manual browser tests');
+    
     sauce.send({
         method: 'POST',
         path: ':username/js-tests',
@@ -55,11 +143,31 @@ if (sauce) {
             build: process.env.TRAVIS_BUILD_NUMBER
         }
     }, function (err, response) {
+        var newJobIds, i, j, l;
         if (err) {
             throw err;
         }
-        console.log('API response:');
-        console.log(response);
+        if (typeof response === 'string') {
+            response = JSON.parse(response);
+        }
+
+        console.log('POST ' + sauceApiUrl + ':username/js-tests');
+        console.log('  => ' + JSON.stringify(response));
+
+        if (response && response['js tests'] instanceof Array) {
+            newJobIds = response['js tests'];
+        } else {
+            newJobIds = [];
+        }
+        for (i = 0, j = runningJobs.length, l = newJobIds.length; i < l; i++) {
+            runningJobs[j++] = newJobIds[i];
+        }
+
+        console.log('All running jobs: ' + JSON.stringify(runningJobs));
+
+        whenJobsCompleted().then(function () {
+            console.log('Done! Terminating script.');
+        });
     });
 
     console.log('End of script');

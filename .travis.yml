@@ -8,5 +8,5 @@ addons:
     - secure: "HBQVaZLHS0+TqBYaliOozGEhtR0DwY8Q+RDKdKupNoGhES7hZbeVzeypcihmMEKmqbWaZsZ5Bl1sVRBNEolAZDR2Urma5nHJOZND+GySnUaooEPDCqJ00axTJ0QdcPBJNlq4lIz/eBq8BW2QS/YLvVRbyieb/K4ZgvXWQBhm1OwasHjmGOXD7qMjqdQQ9T+jWbXRv2jtn3TtFB5jWerTNMMuT+CsBm2Sbj4KZ9DZZEunmc19D971k7ZwRIIW5aSmWV+7fNlnpsbZr3RP8Gyay1r4PwJqoWlXQua8PM6h4TTBVnMX69X5DlGyMO5NApKUnmpzzCbfqlJZUqUZ7ZMPCcdYT6B/cFEObcK5YpfwsTvQS4UXRIbKi0eLmpkWIbhOjFRkFOZUeqr5vRX8VTf3BMh7510IcDzGQyLe0Q07/gc2NwwBDt044Fc2YMZVA102AYAg/347b1uD8VpK+ywxEKvyWENnE/wxRde0355IZTgAedbhZ6Za+yU2HqSINA7gGI2Th92CVEXxCNGx3q9Gq64m58k0jT1zsisO4lNyw5ncCY8l+jEfnrAfvEXVjaOx9Mh4Le8BiDxqQa8rvkufWY+y7Wlz45BEfB3cHUQ5WYRlSmH9U1CE8HcmCwCt2/P+V1jI3uYUVieeSRYTE1ed4ZEsRF0etaRelBp9sJUAdiM="
 before_script:
   - node build/build.js
-  #- python -m SimpleHTTPServer &
-  #- sleep 2
+  - python -m SimpleHTTPServer &
+  - sleep 2
