@@ -33,7 +33,7 @@ const whenJobsCompleted = (function () {
                 'js tests': runningJobIds
             }
         }, function (err, response) {
-            var jobs, job, id, i, j, k, l;
+            var jobs, job, i, j, k, l;
             if (err) {
                 return reject(err);
             }
@@ -44,16 +44,14 @@ const whenJobsCompleted = (function () {
             console.log('POST ' + sauceApiUrl + ':username/js-tests/status');
             console.log('  => ' + JSON.stringify(response));
 
-            if (response && typeof response.complete === 'boolean') {
+            if (response && typeof response.completed === 'boolean') {
                 jobs = response['js tests'] instanceof Array ? response['js tests'] : [];
                 for (i = 0, l = jobs.length, k = completedJobs.length; i < l; i++) {
                     job = jobs[i];
                     if (job instanceof Object && job.result && job.result.pending === 0) {
-                        id = job.job_id;
                         j = runningJobIds.length;
                         while (j--) {
-                            if (runningJobIds[j] === id) {
-                                console.log('Removing completed job ID: "' + id + '"');
+                            if (runningJobIds[j] === job.id) {
                                 runningJobIds.splice(j, 1);
                                 completedJobs[k++] = job;
                                 break;
