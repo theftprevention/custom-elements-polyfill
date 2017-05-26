@@ -47,7 +47,7 @@ const whenJobsCompleted = (function () {
             }
 
             console.log('POST ' + sauceApiUrl + ':username/js-tests/status');
-            //console.log('  => ' + JSON.stringify(response));
+            console.log('  => ' + JSON.stringify(response));
 
             if (response && typeof response.completed === 'boolean') {
                 if (response.completed) {
