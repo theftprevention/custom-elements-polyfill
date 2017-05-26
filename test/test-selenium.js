@@ -58,7 +58,7 @@ const whenJobsCompleted = (function () {
                     if (checkCount < checkLimit) {
                         scheduleJobCheck();
                     } else {
-                        reject(new Error('Status request limit reached.'));
+                        reject(new Error('Status request timeout'));
                     }
                 }
             } else {
@@ -126,8 +126,8 @@ if (sauce) {
             framework: 'mocha',
             'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
             build: process.env.TRAVIS_BUILD_NUMBER,
-            recordScreenshots: false,
-            recordVideo: false
+            recordScreenshots: true,
+            recordVideo: true
         }
     }, function (err, response) {
         var newJobIds, i, j, l;
@@ -139,7 +139,7 @@ if (sauce) {
         }
 
         console.log('POST ' + sauceApiUrl + ':username/js-tests');
-        console.log('  => ' + JSON.stringify(response));
+        //console.log('  => ' + JSON.stringify(response));
 
         if (response && response['js tests'] instanceof Array) {
             newJobIds = response['js tests'];
@@ -154,6 +154,8 @@ if (sauce) {
 
         whenJobsCompleted().then(function () {
             console.log('Done! Terminating script.');
+        }, function (error) {
+            throw error;
         });
     });
 
