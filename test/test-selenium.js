@@ -7,7 +7,6 @@ const
 const
     checkInterval = 5000,
     checkIntervalSeconds = checkInterval / 1000,
-    checkLimit = 12,
     sauceApiUrl = 'https://saucelabs.com/rest/v1/',
     completedJobs = [],
     runningJobIds = [],
@@ -23,14 +22,14 @@ const whenJobsCompleted = (function () {
     var resolve, reject, promise;
 
     function scheduleJobCheck() {
-        console.log('Launching status request ' + (checkCount + 1) + ' of ' + checkLimit + ' in ' + checkIntervalSeconds + ' second' + (checkIntervalSeconds === 1 ? '' : 's') + '.');
+        console.log('Launching status request ' + (checkCount + 1) + ' in ' + checkIntervalSeconds + ' second' + (checkIntervalSeconds === 1 ? '' : 's') + '.');
         setTimeout(checkJobs, checkInterval);
     }
 
     function checkJobs() {
 
         checkCount++;
-        console.log('Launching status request ' + checkCount + ' of ' + checkLimit + '.');
+        console.log('Launching status request ' + checkCount + '.');
 
         sauce.send({
             method: 'POST',
@@ -39,6 +38,7 @@ const whenJobsCompleted = (function () {
                 'js tests': runningJobIds
             }
         }, function (err, response) {
+            var tests, remaining;
             if (err) {
                 return reject(err);
             }
@@ -54,12 +54,19 @@ const whenJobsCompleted = (function () {
                     console.log('All jobs completed.');
                     resolve(response['js tests']);
                 } else {
-                    console.log('Some jobs are still in progress.');
-                    if (checkCount < checkLimit) {
-                        scheduleJobCheck();
+                    tests = response['js tests'];
+                    if (tests instanceof Array) {
+                        remaining = 0;
+                        for (var i = 0, l = tests.length; i < l; i++) {
+                            if (!tests.result) {
+                                remaining++;
+                            }
+                        }
+                        console.log(remaining + ' job' + (remaining === 1 ? ' is' : 's are') + ' still in progress.');
                     } else {
-                        reject(new Error('Status request timeout'));
+                        console.log('Some jobs are still in progress.');
                     }
+                    scheduleJobCheck();
                 }
             } else {
                 reject(new Error('Could not parse API response.'));
@@ -122,8 +129,7 @@ if (sauce) {
                 ['Windows 7', 'internet explorer', '11'],
                 ['Windows 10', 'chrome', 'latest'],
                 ['Windows 10', 'edge', 'latest'],
-                ['macOS', 'firefox', 'latest'],
-                ['iOS', 'iphone', 'latest']
+                ['macOS', 'firefox', 'latest']
             ],
             framework: 'mocha',
             'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
