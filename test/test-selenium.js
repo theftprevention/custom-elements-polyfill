@@ -38,7 +38,7 @@ const whenJobsCompleted = (function () {
                 'js tests': runningJobIds
             }
         }, function (err, response) {
-            var tests, remaining;
+            var tests, test, remaining, i, l, j;
             if (err) {
                 return reject(err);
             }
@@ -50,18 +50,36 @@ const whenJobsCompleted = (function () {
             console.log('  => ' + JSON.stringify(response));
 
             if (response && typeof response.completed === 'boolean') {
-                if (response.completed) {
-                    console.log('All jobs completed.');
-                    resolve(response['js tests']);
-                } else {
-                    tests = response['js tests'];
-                    if (tests instanceof Array) {
-                        remaining = 0;
-                        for (var i = 0, l = tests.length; i < l; i++) {
-                            if (!tests.result) {
-                                remaining++;
+                tests = response['js tests'];
+                if (tests instanceof Array) {
+                    remaining = 0;
+                    for (i = 0, l = tests.length; i < l; i++) {
+                        test = tests[i];
+                        if ((test.result && test.result.pending === 0) || (test.status && String(test.status).toLowerCase() === 'test error')) {
+                            j = runningJobIds.length;
+                            while (j--) {
+                                if (runningJobIds[j] === test.id) {
+                                    runningJobIds.splice(j, 1);
+                                    break;
+                                }
+                            }
+                            if (test.status) {
+                                console.log('Job failed: ' + test.id);
+                                console.log(JSON.stringify(test));
+                            } else {
+                                console.log('Job complete: ' + test.id);
                             }
                         }
+                        if (!test.result) {
+                            remaining++;
+                        }
+                    }
+                }
+                if (response.completed) {
+                    console.log('All jobs completed.');
+                    resolve(tests);
+                } else {
+                    if (typeof remaining === 'number') {
                         console.log(remaining + ' job' + (remaining === 1 ? ' is' : 's are') + ' still in progress.');
                     } else {
                         console.log('Some jobs are still in progress.');
