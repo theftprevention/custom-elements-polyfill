@@ -47,7 +47,7 @@ const whenJobsCompleted = (function () {
             }
 
             console.log('POST ' + sauceApiUrl + ':username/js-tests/status');
-            console.log('  => ' + JSON.stringify(response));
+            //console.log('  => ' + JSON.stringify(response));
 
             if (response && typeof response.completed === 'boolean') {
                 if (response.completed) {
@@ -121,7 +121,7 @@ if (sauce) {
             platforms: [
                 ['Windows 7', 'internet explorer', '11'],
                 ['Windows 10', 'chrome', '58'],
-                ['Linux', 'opera', '12.15']
+                ['Linux', 'opera', 'latest']
             ],
             framework: 'mocha',
             'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
@@ -139,7 +139,7 @@ if (sauce) {
         }
 
         console.log('POST ' + sauceApiUrl + ':username/js-tests');
-        //console.log('  => ' + JSON.stringify(response));
+        console.log('  => ' + JSON.stringify(response));
 
         if (response && response['js tests'] instanceof Array) {
             newJobIds = response['js tests'];
@@ -154,7 +154,7 @@ if (sauce) {
 
         whenJobsCompleted().then(function () {
             console.log('Done! Terminating script.');
-        }, function (error) {
+        }).catch(function (error) {
             throw error;
         });
     });
