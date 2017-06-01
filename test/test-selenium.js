@@ -145,9 +145,10 @@ if (sauce) {
             url: 'http://localhost:8000/test/index.html',
             platforms: [
                 ['Windows 7', 'internet explorer', '11'],
-                ['Windows 10', 'chrome', 'latest'],
-                ['Windows 10', 'edge', 'latest'],
-                ['macOS', 'firefox', 'latest']
+                ['Windows 10', 'chrome', '58'],
+                ['Windows 10', 'MicrosoftEdge', '14'],
+                ['macOS 10.12', 'firefox', '53'],
+                ['Mac 10.11', 'iphone', '10.2']
             ],
             framework: 'mocha',
             'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,

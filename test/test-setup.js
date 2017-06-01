@@ -91,7 +91,7 @@
      * @param {object} [options]
      * @returns {Array.<TestElementDefinition>}
      */
-    function generateTests(options) {
+    function generateAllTests(options) {
         var tests, names, name, value, i, j, k, newOptions, permutation, t;
         if (options instanceof Object) {
             names = Object.getOwnPropertyNames(options);
@@ -109,7 +109,7 @@
                             newOptions[n] = options[n];
                         });
                         newOptions[name] = value[j];
-                        permutation = generateTests(newOptions);
+                        permutation = generateAllTests(newOptions);
                         k = permutation.length;
                         while (k--) {
                             tests[t++] = permutation[k];
@@ -120,7 +120,7 @@
             }
             return [new TestElementDefinition(options)];
         } else {
-            return generateTests({
+            return generateAllTests({
                 defineEarly: [true, false],
                 isClass: supportsClasses ? [true, false] : false,
                 localName: Object.getOwnPropertyNames(builtInElements).concat(null)
@@ -278,7 +278,7 @@
     global.test = api;
 
     mocha.setup('bdd');
-    generateTests();
+    generateAllTests();
     
     describe('window.CustomElementRegistry', function () {
         it('should be a function', function () {
