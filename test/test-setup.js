@@ -59,20 +59,39 @@
                 return false;
             }
         })(),
-        runner;
-
-    (function () {
-
-        var p, s;
-
-        if (!global.Promise) {
-            s = document.head.getElementsByTagName('script')[0];
-            p = document.createElement('script');
-            p.src = '../lib/es6-promise.auto.min.js';
-            document.head.insertBefore(p, s);
-        }
-
-    })();
+        native = supportsClasses ? (function () {
+            var instance, prototype, define, get, whenDefined;
+            if (typeof global.CustomElementRegistry !== 'function' || !(global.customElements instanceof global.CustomElementRegistry)) {
+                return null;
+            }
+            instance = global.customElements;
+            prototype = global.CustomElementRegistry.prototype;
+            define = prototype.define.bind(instance);
+            get = prototype.get.bind(instance);
+            whenDefined = prototype.whenDefined.bind(instance);
+            return {
+                canExtend: (function () {
+                    var name = 'custom-elements-polyfill-test',
+                        tag = 'div',
+                        constructor,
+                        /// <var type="HTMLElement" />
+                        e;
+                    try {
+                        constructor = eval("var a=class extends HTMLDivElement{constructor(){super();}};a;");
+                        define(name, constructor, { 'extends': tag });
+                        e = new constructor();
+                        return (e && e instanceof global.HTMLDivElement && e.tagName.toLowerCase() === tag && e.getAttribute('is') === name);
+                    } catch (ex) {
+                        return false;
+                    }
+                })(),
+                define: define,
+                'get': get,
+                instance: instance,
+                prototype: prototype,
+                whenDefined: whenDefined
+            };
+        })() : null;
 
     /**
      * @param {Mocha.Test} test
@@ -126,6 +145,16 @@
                 localName: Object.getOwnPropertyNames(builtInElements).concat(null)
             });
         }
+    }
+
+    /**
+     * @param {string} src
+     */
+    function loadScript(src) {
+        var s = document.head.getElementsByTagName('script')[0],
+            p = document.createElement('script');
+        p.src = src;
+        document.head.insertBefore(p, s);
     }
 
     /**
@@ -219,8 +248,7 @@
 
         definitions[name] = this;
         if (localName !== 'body' && localName !== 'head' && localName !== 'html') {
-            document.body.appendChild(document.createElement(localName));
-            //document.write('<' + localName + (localName === name ? '' : ' is="' + name + '"') + (empty ? ' />' : '></' + localName + '>'));
+            container.appendChild(document.createElement(localName));
         }
     }
 
@@ -280,19 +308,19 @@
     mocha.setup('bdd');
     generateAllTests();
     
-    describe('window.CustomElementRegistry', function () {
+    describe('CustomElementRegistry', function () {
         it('should be a function', function () {
             expect(CustomElementRegistry).to.be.a('function');
         });
-        context('should throw a TypeError when invoked', function () {
-            specify('with the new keyword', function () {
+        context('should throw a TypeError', function () {
+            specify('when invoked with the new keyword', function () {
                 expect(function () {
                     return new CustomElementRegistry();
                 }).to.throwException(function (e) {
                     expect(e).to.be.a(TypeError);
                 });
             });
-            specify('without the new keyword', function () {
+            specify('when invoked without the new keyword', function () {
                 expect(CustomElementRegistry).to.throwException(function (e) {
                     expect(e).to.be.a(TypeError);
                 });
@@ -300,7 +328,7 @@
         });
     });
 
-    describe('window.CustomElementRegistry.prototype', function () {
+    describe('CustomElementRegistry.prototype', function () {
         it('should be an object', function () {
             expect(CustomElementRegistry.prototype).to.be.a('object');
         });
@@ -315,32 +343,123 @@
         });
     });
 
-    describe('window.customElements', function () {
+    describe('customElements', function () {
         it('should be an instance of CustomElementRegistry', function () {
             expect(customElements).to.be.a(CustomElementRegistry);
         });
     });
 
-    mocha.globals(['mochaResults', 'test']);
-
-    runner = mocha.run();
-    runner.on('end', function () {
-
-        var results = runner.stats,
-            resultContainer = document.createElement('pre');
-
-        results.reports = reports;
-
-        global.mochaResults = results;
-
-        resultContainer.id = 'results';
-        resultContainer.appendChild(document.createTextNode(JSON.stringify(results)));
-
-        document.body.appendChild(resultContainer);
-
-        console.log(global.mochaResults);
+    describe('CustomElementRegistry.prototype.define', function () {
+        context('should throw a TypeError', function () {
+            specify('when invoked with an invalid context object', function () {
+                expect(function () {
+                    CustomElementRegistry.prototype.define.call(window);
+                }).to.throwException(function (e) {
+                    expect(e).to.be.a(TypeError);
+                });
+            });
+            specify('when invoked with no arguments', function () {
+                expect(function () {
+                    customElements.define();
+                }).to.throwException(function (e) {
+                    expect(e).to.be.a(TypeError);
+                });
+            });
+            specify('when invoked with only 1 argument', function () {
+                expect(function () {
+                    customElements.define('should-fail');
+                }).to.throwException(function (e) {
+                    expect(e).to.be.a(TypeError);
+                });
+            });
+            specify('when invoked with a second argument ("constructor") that is not a function', function () {
+                expect(function () {
+                    customElements.define('should-fail', 42);
+                }).to.throwException(function (e) {
+                    expect(e).to.be.a(TypeError);
+                });
+            });
+            specify('when invoked with a third argument ("options") that is not an object', function () {
+                expect(function () {
+                    customElements.define('should-fail', function () { }, 42);
+                }).to.throwException(function (e) {
+                    expect(e).to.be.a(TypeError);
+                });
+            });
+            specify('when constructor.prototype is not an object', function () {
+                expect(function () {
+                    var f = function () { };
+                    f.prototype = null;
+                    customElements.define('should-fail', f);
+                }).to.throwException(function (e) {
+                    expect(e).to.be.a(TypeError);
+                });
+            });
+            specify('when constructor.prototype.adoptedCallback is defined, but is not a function', function () {
+                expect(function () {
+                    var f = function () { };
+                    f.prototype.adoptedCallback = null;
+                    customElements.define('should-fail', f);
+                }).to.throwException(function (e) {
+                    expect(e).to.be.a(TypeError);
+                });
+            });
+            specify('when constructor.prototype.attributeChangedCallback is defined, but is not a function', function () {
+                expect(function () {
+                    var f = function () { };
+                    f.prototype.attributeChangedCallback = null;
+                    customElements.define('should-fail', f);
+                }).to.throwException(function (e) {
+                    expect(e).to.be.a(TypeError);
+                });
+            });
+            specify('when constructor.prototype.connectedCallback is defined, but is not a function', function () {
+                expect(function () {
+                    var f = function () { };
+                    f.prototype.connectedCallback = null;
+                    customElements.define('should-fail', f);
+                }).to.throwException(function (e) {
+                    expect(e).to.be.a(TypeError);
+                });
+            });
+            specify('when constructor.prototype.disconnectedCallback is defined, but is not a function', function () {
+                expect(function () {
+                    var f = function () { };
+                    f.prototype.disconnectedCallback = null;
+                    customElements.define('should-fail', f);
+                }).to.throwException(function (e) {
+                    expect(e).to.be.a(TypeError);
+                });
+            });
+        });
+        context('should throw a \'SyntaxError\' DOMException when invoked with the invalid custom element name', function () {
+            ['div', 'My-element'].forEach(function (name) {
+                specify('"' + name + '"', function () {
+                    expect(function () {
+                        customElements.define(name, function () { });
+                    }).to.throwException(function (e) {
+                        expect(e).to.be.a(DOMException);
+                        expect(e.code).to.be(DOMException.SYNTAX_ERR);
+                    });
+                });
+            });
+        });
     });
-    runner.on('fail', logResult);
-    runner.on('pass', logResult);
 
+    api.run = function () {
+        var runner = mocha.run();
+        runner.on('end', function () {
+            var results = runner.stats;
+            results.reports = reports;
+            global.mochaResults = results;
+        });
+        runner.on('fail', logResult);
+        runner.on('pass', logResult);
+        return runner;
+    };
+
+    if (!global.Promise) {
+        loadScript('../lib/es6-promise.auto.min.js');
+    }
+    
 })(window);
