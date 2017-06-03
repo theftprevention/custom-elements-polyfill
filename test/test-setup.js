@@ -1,6 +1,6 @@
-/// <reference path="../src/custom-elements-polyfill.js" />
-/// <reference path="https://cdn.rawgit.com/Automattic/expect.js/0.3.1/index.js" />
-/// <reference path="https://cdnjs.cloudflare.com/ajax/libs/mocha/3.4.1/mocha.min.js" />
+/// <reference path="../dist/custom-elements-polyfill.js" />
+/// <reference path="../lib/expect.js" />
+/// <reference path="../lib/mocha.min.js" />
 
 (function (global, undefined) {
     'use strict';
@@ -15,15 +15,31 @@
      *   should be undefined or null.
      */
     
-    var api = {},
-        builtInElements = {},
+    var builtInElements = {},
         comparisonInterface = (HTMLUnknownElement || HTMLElement).prototype,
         container = document.getElementById('test-container'),
         createElement = Document.prototype.createElement.bind(document),
         definitions = {},
         descriptors = {},
-        emptyElements = 'area,base,br,col,embed,hr,img,input,link,meta,param,source,track,wbr'.split(','),
         expect = window.expect,
+        getOwnPropertyDescriptors = (function () {
+            if (typeof Object.getOwnPropertyDescriptors === 'function') {
+                return Object.getOwnPropertyDescriptors;
+            }
+            /** @returns {object} */
+            return function getOwnPropertyDescriptors(O) {
+                var names = Object.getOwnPropertyNames(O),
+                    i = 0,
+                    l = names.length,
+                    result = {},
+                    name;
+                while (i < l) {
+                    name = names[i++];
+                    result[name] = Object.getOwnPropertyDescriptor(O, name);
+                }
+                return result;
+            };
+        })(),
         interfacesByPrototype = new Map(),
         Mocha = global.Mocha,
         mocha = global.mocha,
@@ -69,29 +85,101 @@
             define = prototype.define.bind(instance);
             get = prototype.get.bind(instance);
             whenDefined = prototype.whenDefined.bind(instance);
-            return {
-                canExtend: (function () {
-                    var name = 'custom-elements-polyfill-test',
-                        tag = 'div',
-                        constructor,
-                        /// <var type="HTMLElement" />
-                        e;
-                    try {
-                        constructor = eval("var a=class extends HTMLDivElement{constructor(){super();}};a;");
-                        define(name, constructor, { 'extends': tag });
-                        e = new constructor();
-                        return (e && e instanceof global.HTMLDivElement && e.tagName.toLowerCase() === tag && e.getAttribute('is') === name);
-                    } catch (ex) {
-                        return false;
-                    }
-                })(),
-                define: define,
-                'get': get,
-                instance: instance,
-                prototype: prototype,
-                whenDefined: whenDefined
-            };
-        })() : null;
+            return Object.defineProperties({}, {
+                canExtend: {
+                    value: (function () {
+                        var name = 'custom-elements-polyfill-test',
+                            tag = 'div',
+                            constructor,
+                            /// <var type="HTMLElement" />
+                            e;
+                        try {
+                            constructor = eval("var a=class extends HTMLDivElement{constructor(){super();}};a;");
+                            define(name, constructor, { 'extends': tag });
+                            e = new constructor();
+                            return (e && e instanceof global.HTMLDivElement && e.tagName.toLowerCase() === tag && e.getAttribute('is') === name);
+                        } catch (ex) {
+                            return false;
+                        }
+                    })()
+                },
+                define: {
+                    value: define
+                },
+                'get': {
+                    value: get
+                },
+                instance: {
+                    value: instance
+                },
+                prototype: {
+                    value: prototype
+                },
+                whenDefined: {
+                    value: whenDefined
+                }
+            });
+        })() : null,
+        INDEX_SIZE_ERR = { code: 1, name: 'IndexSizeError' },
+        HIERARCHY_REQUEST_ERR = { code: 3, name: 'HierarchyRequestError' },
+        WRONG_DOCUMENT_ERR = { code: 4, name: 'WrongDocumentError' },
+        INVALID_CHARACTER_ERR = { code: 5, name: 'InvalidCharacterError' },
+        NO_MODIFICATION_ALLOWED_ERR = { code: 7, name: 'NoModificationAllowedError' },
+        NOT_FOUND_ERR = { code: 8, name: 'NotFoundError' },
+        NOT_SUPPORTED_ERR = { code: 9, name: 'NotSupportedError' },
+        INVALID_STATE_ERR = { code: 11, name: 'InvalidStateError' },
+        SYNTAX_ERR = { code: 12, name: 'SyntaxError' },
+        INVALID_MODIFICATION_ERR = { code: 13, name: 'InvalidModificationError' },
+        NAMESPACE_ERR = { code: 14, name: 'NamespaceError' },
+        INVALID_ACCESS_ERR = { code: 15, name: 'InvalidAccessError' },
+        TYPE_MISMATCH_ERR = { code: 17, name: 'TypeMismatchError' },
+        SECURITY_ERR = { code: 18, name: 'SecurityError' },
+        NETWORK_ERR = { code: 19, name: 'NetworkError' },
+        ABORT_ERR = { code: 20, name: 'AbortError' },
+        URL_MISMATCH_ERR = { code: 21, name: 'URLMismatchError' },
+        QUOTA_EXCEEDED_ERR = { code: 22, name: 'QuotaExceededError' },
+        TIMEOUT_ERR = { code: 23, name: 'TimeoutError' },
+        INVALID_NODE_TYPE_ERR = { code: 24, name: 'InvalidNodeTypeError' },
+        DATA_CLONE_ERR = { code: 25, name: 'DataCloneError' };
+
+    /**
+     * @param {object} [options]
+     * @returns {function}
+     */
+    function defineElement(options) {
+        var isClass, localName, name, constructor, interfaceConstructor, interfacePrototype;
+
+        options = Object(options == null ? {} : options);
+
+        isClass = supportsClasses ? !!options.isClass : false;
+        name = options.name || uniqueCustomElementName();
+        localName = options.localName || name;
+
+        interfaceConstructor = builtInElements[localName] || HTMLElement;
+        interfacePrototype = interfaceConstructor.prototype;
+
+        constructor = options.hasOwnProperty('constructor') && typeof options.constructor === 'function' ? options.constructor : function () { };
+        constructor.prototype = Object.create(interfacePrototype);
+        constructor.prototype.constructor = constructor;
+
+        if (isClass) {
+            constructor = eval("(function () { return function (a) { return class extends a { constructor() { super(); } }; }; })()")(constructor);
+        }
+
+        if (options.hasOwnProperty('prototype') && options.prototype instanceof Object) {
+            Object.defineProperties(constructor.prototype, Object.getOwnPropertyDescriptors(options.prototype));
+        }
+
+        if (name === localName) {
+            customElements.define(name, constructor);
+        } else {
+            customElements.define(name, constructor, { 'extends': localName });
+        }
+        return {
+            constructor: customElements.get(name),
+            name: name
+        };
+    }
 
     /**
      * @param {Mocha.Test} test
@@ -107,44 +195,41 @@
     };
 
     /**
-     * @param {object} [options]
-     * @returns {Array.<TestElementDefinition>}
+     * @param {object} obj
+     * @param {Array.<string>} [arrayProperties]
+     * @returns {Array}
      */
-    function generateAllTests(options) {
-        var tests, names, name, value, i, j, k, newOptions, permutation, t;
-        if (options instanceof Object) {
-            names = Object.getOwnPropertyNames(options);
-            i = names.length;
-            while (i--) {
-                name = names[i];
-                value = options[name];
-                if (value instanceof Array) {
-                    tests = [];
-                    t = 0;
-                    j = value.length;
-                    while (j--) {
-                        newOptions = {};
-                        Object.getOwnPropertyNames(options).forEach(function (n) {
-                            newOptions[n] = options[n];
-                        });
-                        newOptions[name] = value[j];
-                        permutation = generateAllTests(newOptions);
-                        k = permutation.length;
-                        while (k--) {
-                            tests[t++] = permutation[k];
+    function permutate(obj, arrayProperties) {
+        var value, result, i, l, p, q, r, newObj, permutations;
+        if (obj == null) {
+            return [];
+        }
+        if (!(arrayProperties instanceof Array)) {
+            arrayProperties = null;
+        }
+        obj = Object(obj);
+        for (var prop in obj) {
+            value = obj[prop];
+            if (value instanceof Array && (!arrayProperties || arrayProperties.indexOf(prop) === -1)) {
+                result = [];
+                r = 0;
+                for (i = 0, l = value.length; i < l; i++) {
+                    newObj = {};
+                    for (var copyProp in obj) {
+                        if (prop !== copyProp) {
+                            newObj[copyProp] = obj[copyProp];
                         }
                     }
-                    return tests;
+                    newObj[prop] = value[i];
+                    permutations = permutate(newObj, arrayProperties);
+                    for (p = 0, q = permutations.length; p < q; p++) {
+                        result[r++] = permutations[p];
+                    }
                 }
+                return result;
             }
-            return [new TestElementDefinition(options)];
-        } else {
-            return generateAllTests({
-                defineEarly: [true, false],
-                isClass: supportsClasses ? [true, false] : false,
-                localName: Object.getOwnPropertyNames(builtInElements).concat(null)
-            });
         }
+        return [obj];
     }
 
     /**
@@ -180,6 +265,18 @@
         reports.push(result);
     }
 
+    function runTests() {
+        var runner = mocha.run();
+        runner.on('end', function () {
+            var results = runner.stats;
+            results.reports = reports;
+            global.mochaResults = results;
+        });
+        runner.on('fail', logResult);
+        runner.on('pass', logResult);
+        return runner;
+    }
+
     /**
      * @param {function|object} interf
      * @returns {Array.<string>}
@@ -206,6 +303,13 @@
     }
 
     /**
+     * @returns {string}
+     */
+    function uniqueCustomElementName() {
+        return 'test-' + (++nameIncrement);
+    }
+
+    /**
      * Represents a single custom element definition against which a series of tests is
      *   performed.
      * @class
@@ -222,19 +326,15 @@
      *   to the 'name'; for customized built-in elements, it is not.
      * @property {string} name - The custom element name.
      */
-    function TestElementDefinition(options) {
-        var name = 'test-' + (++nameIncrement),
+    function TestElement(options) {
+        var name = uniqueCustomElementName(),
             localName = options.localName || name,
-            empty = Boolean(options.localName && emptyElements.indexOf(localName) > -1);
+            element;
 
         Object.defineProperties(this, {
             basePrototype: {
                 enumerable: true,
                 value: (builtInElements[localName] || HTMLElement).prototype
-            },
-            defineEarly: {
-                enumerable: true,
-                value: !!options.defineEarly
             },
             localName: {
                 enumerable: true,
@@ -248,7 +348,11 @@
 
         definitions[name] = this;
         if (localName !== 'body' && localName !== 'head' && localName !== 'html') {
-            container.appendChild(document.createElement(localName));
+            element = document.createElement(localName);
+            if (localName !== name) {
+                element.setAttribute('is', name);
+            }
+            container.appendChild(element);
         }
     }
 
@@ -297,20 +401,64 @@
     });
     Object.defineProperties(builtInElements, descriptors);
 
-    Object.defineProperties(api, {
+    global.util = Object.defineProperties({}, {
         builtInElements: {
             enumerable: true,
             value: builtInElements
+        },
+        defineElement: {
+            enumerable: true,
+            value: defineElement
+        },
+        native: {
+            enumerable: true,
+            value: native
+        },
+        permutate: {
+            enumerable: true,
+            value: permutate
+        },
+        runTests: {
+            enumerable: true,
+            value: runTests
+        },
+        supportsClasses: {
+            enumerable: true,
+            value: supportsClasses
         }
     });
-    global.test = api;
+
+    // expect.js extensions
+    Object.defineProperties(Object.getPrototypeOf(expect().to), {
+        throwDOMException: {
+            configurable: true,
+            enumerable: true,
+            value: function throwDOMException(type) {
+                var code, name;
+                if (type && typeof type.code === 'number' && typeof type.name === 'string') {
+                    code = type.code;
+                    name = type.name;
+                }
+                return this.throwException(function (ex) {
+                    expect(ex).to.be.a(DOMException);
+                    if (code && name) {
+                        expect(ex.code).to.be(code);
+                        expect(ex.name).to.be(name);
+                    }
+                });
+            },
+            writable: true
+        }
+    });
 
     mocha.setup('bdd');
-    generateAllTests();
     
-    describe('CustomElementRegistry', function () {
+    describe('window.CustomElementRegistry', function () {
         it('should be a function', function () {
             expect(CustomElementRegistry).to.be.a('function');
+        });
+        it('should have a prototype object', function () {
+            expect(CustomElementRegistry.prototype).to.be.an('object');
         });
         context('should throw a TypeError', function () {
             specify('when invoked with the new keyword', function () {
@@ -328,28 +476,31 @@
         });
     });
 
-    describe('CustomElementRegistry.prototype', function () {
-        it('should be an object', function () {
-            expect(CustomElementRegistry.prototype).to.be.a('object');
-        });
-        it('should have a \'define\' method', function () {
-            expect(CustomElementRegistry.prototype.define).to.be.a('function');
-        });
-        it('should have a \'get\' method', function () {
-            expect(CustomElementRegistry.prototype.get).to.be.a('function');
-        });
-        it('should have a \'whenDefined\' method', function () {
-            expect(CustomElementRegistry.prototype.whenDefined).to.be.a('function');
-        });
-    });
-
-    describe('customElements', function () {
+    describe('window.customElements', function () {
         it('should be an instance of CustomElementRegistry', function () {
             expect(customElements).to.be.a(CustomElementRegistry);
         });
     });
 
-    describe('CustomElementRegistry.prototype.define', function () {
+    describe('CustomElementRegistry.prototype.define()', function () {
+        var descriptor = Object.getOwnPropertyDescriptor(CustomElementRegistry.prototype, 'define');
+
+        it('should be a property of CustomElementRegistry.prototype', function () {
+            expect(descriptor).to.be.an('object');
+        });
+        it('should be a configurable property', function () {
+            expect(descriptor.configurable).to.be(true);
+        });
+        it('should be an enumerable property', function () {
+            expect(descriptor.enumerable).to.be(true);
+        });
+        it('should be a writable property', function () {
+            expect(descriptor.writable).to.be(true);
+        });
+        it('should be a function', function () {
+            expect(CustomElementRegistry.prototype.define).to.be.a('function');
+        });
+
         context('should throw a TypeError', function () {
             specify('when invoked with an invalid context object', function () {
                 expect(function () {
@@ -367,21 +518,21 @@
             });
             specify('when invoked with only 1 argument', function () {
                 expect(function () {
-                    customElements.define('should-fail');
+                    customElements.define(uniqueCustomElementName());
                 }).to.throwException(function (e) {
                     expect(e).to.be.a(TypeError);
                 });
             });
             specify('when invoked with a second argument ("constructor") that is not a function', function () {
                 expect(function () {
-                    customElements.define('should-fail', 42);
+                    customElements.define(uniqueCustomElementName(), 42);
                 }).to.throwException(function (e) {
                     expect(e).to.be.a(TypeError);
                 });
             });
             specify('when invoked with a third argument ("options") that is not an object', function () {
                 expect(function () {
-                    customElements.define('should-fail', function () { }, 42);
+                    customElements.define(uniqueCustomElementName(), function () { }, 42);
                 }).to.throwException(function (e) {
                     expect(e).to.be.a(TypeError);
                 });
@@ -390,76 +541,241 @@
                 expect(function () {
                     var f = function () { };
                     f.prototype = null;
-                    customElements.define('should-fail', f);
+                    customElements.define(uniqueCustomElementName(), f);
                 }).to.throwException(function (e) {
                     expect(e).to.be.a(TypeError);
                 });
             });
-            specify('when constructor.prototype.adoptedCallback is defined, but is not a function', function () {
-                expect(function () {
-                    var f = function () { };
-                    f.prototype.adoptedCallback = null;
-                    customElements.define('should-fail', f);
-                }).to.throwException(function (e) {
-                    expect(e).to.be.a(TypeError);
+
+            [
+                'adoptedCallback',
+                'attributeChangedCallback',
+                'connectedCallback',
+                'disconnectedCallback'
+            ].forEach(function (callbackName) {
+                specify('when constructor.prototype has a property named "' + callbackName + '" that is not undefined and is not a function', function () {
+                    expect(function () {
+                        var f = function () { };
+                        f.prototype[callbackName] = null;
+                        customElements.define(uniqueCustomElementName(), f);
+                    }).to.throwException(function (e) {
+                        expect(e).to.be.a(TypeError);
+                    });
                 });
             });
-            specify('when constructor.prototype.attributeChangedCallback is defined, but is not a function', function () {
+            specify('when constructor.prototype.attributeChangedCallback is defined, and the constructor has a property named "observedAttributes" that is not undefined and cannot be converted to an array of strings', function () {
                 expect(function () {
                     var f = function () { };
-                    f.prototype.attributeChangedCallback = null;
-                    customElements.define('should-fail', f);
-                }).to.throwException(function (e) {
-                    expect(e).to.be.a(TypeError);
-                });
-            });
-            specify('when constructor.prototype.connectedCallback is defined, but is not a function', function () {
-                expect(function () {
-                    var f = function () { };
-                    f.prototype.connectedCallback = null;
-                    customElements.define('should-fail', f);
-                }).to.throwException(function (e) {
-                    expect(e).to.be.a(TypeError);
-                });
-            });
-            specify('when constructor.prototype.disconnectedCallback is defined, but is not a function', function () {
-                expect(function () {
-                    var f = function () { };
-                    f.prototype.disconnectedCallback = null;
-                    customElements.define('should-fail', f);
+                    f.prototype.attributeChangedCallback = function () { };
+                    f.observedAttributes = null;
+                    customElements.define(uniqueCustomElementName(), f);
                 }).to.throwException(function (e) {
                     expect(e).to.be.a(TypeError);
                 });
             });
         });
-        context('should throw a \'SyntaxError\' DOMException when invoked with the invalid custom element name', function () {
-            ['div', 'My-element'].forEach(function (name) {
-                specify('"' + name + '"', function () {
+        context('should throw a "NotSupportedError" DOMException', function () {
+
+            permutate({
+                leftExtends: [null, 'div'],
+                leftIsClass: supportsClasses ? [true, false] : false,
+                rightExtends: [null, 'div'],
+                rightIsClass: supportsClasses ? [true, false] : false
+            }).forEach(function (o) {
+                var name = uniqueCustomElementName(),
+                    leftOpts = { isClass: o.leftIsClass, localName: o.leftExtends, name: name },
+                    leftType = (o.leftExtends ? 'a customized built-in element' : 'an autonomous custom element') + ' (using ' + (o.leftIsClass ? 'ES6 class' : 'function') + ' syntax)',
+                    rightOpts = { isClass: o.rightIsClass, localName: o.rightExtends, name: name },
+                    rightType = (o.leftExtends === o.rightExtends ? 'another' : ('a' + (o.rightExtends ? '' : 'n'))) + (o.rightExtends ? ' customized built-in element' : ' autonomous custom element') + ' definition (using ' + (o.rightIsClass ? 'ES6 class' : 'function') + ' syntax)';
+                defineElement(rightOpts);
+                specify('when defining ' + leftType + ' whose name is already in use by ' + rightType, function () {
                     expect(function () {
+                        defineElement(leftOpts);
+                    }).to.throwDOMException(NOT_SUPPORTED_ERR);
+                });
+            });
+
+            context('when defining an autonomous custom element', function () {
+                context('whose constructor is already in use', function () {
+                    specify('by another autonomous custom element definition', function () {
+                        var c = function () { };
+                        customElements.define(uniqueCustomElementName(), c);
+                        expect(function () {
+                            customElements.define(uniqueCustomElementName(), c);
+                        }).to.throwDOMException(NOT_SUPPORTED_ERR);
+                    });
+                    specify('by a customized built-in element definition', function () {
+                        var c = function () { };
+                        customElements.define(uniqueCustomElementName(), c, { 'extends': 'div' });
+                        expect(function () {
+                            customElements.define(uniqueCustomElementName(), c);
+                        }).to.throwDOMException(NOT_SUPPORTED_ERR);
+                    });
+                });
+                context('whose name is already in use', function () {
+                    specify('by another autonomous custom element definition', function () {
+                        var name = uniqueCustomElementName();
                         customElements.define(name, function () { });
-                    }).to.throwException(function (e) {
-                        expect(e).to.be.a(DOMException);
-                        expect(e.code).to.be(DOMException.SYNTAX_ERR);
+                        expect(function () {
+                            customElements.define(name, function () { });
+                        }).to.throwDOMException(NOT_SUPPORTED_ERR);
+                    });
+                    specify('by a customized built-in element definition', function () {
+                        var name = uniqueCustomElementName();
+                        customElements.define(name, function () { }, { 'extends': 'div' });
+                        expect(function () {
+                            customElements.define(name, function () { });
+                        }).to.throwDOMException(NOT_SUPPORTED_ERR);
+                    });
+                });
+            });
+            context('when defining a customized built-in element', function () {
+                context('whose constructor is already in use', function () {
+                    if (supportsClasses) {
+                        context('by an autonomous custom element definition', function () {
+                            
+                        });
+                    } else {
+                        specify('by an autonomous custom element definition', function () {
+                            var c = function () { };
+                            customElements.define(uniqueCustomElementName(), c);
+                            expect(function () {
+                                customElements.define(uniqueCustomElementName(), c, { 'extends': 'div' });
+                            }).to.throwDOMException(NOT_SUPPORTED_ERR);
+                        });
+                        specify('by another customized built-in element definition', function () {
+                            var c = function () { };
+                            customElements.define(uniqueCustomElementName(), c, { 'extends': 'div' });
+                            expect(function () {
+                                customElements.define(uniqueCustomElementName(), c, { 'extends': 'div' });
+                            }).to.throwDOMException(NOT_SUPPORTED_ERR);
+                        });
+                    }
+                });
+                context('whose name is already in use', function () {
+                    specify('by an autonomous custom element definition', function () {
+                        var name = uniqueCustomElementName();
+                        customElements.define(name, function () { });
+                        expect(function () {
+                            customElements.define(name, function () { }, { 'extends': 'div' });
+                        }).to.throwDOMException(NOT_SUPPORTED_ERR);
+                    });
+                    specify('by another customized built-in element definition', function () {
+                        var name = uniqueCustomElementName();
+                        customElements.define(name, function () { }, { 'extends': 'div' });
+                        expect(function () {
+                            customElements.define(name, function () { }, { 'extends': 'div' });
+                        }).to.throwDOMException(NOT_SUPPORTED_ERR);
+                    });
+                });
+            });
+        });
+        context('should throw a "SyntaxError" DOMException', function () {
+            var
+                invalidTagNames = [
+                    'div',
+                    'hello',
+                    'Capitalized-Name',
+                    'name-with-exclamation-point!',
+                    'name-with:colon'
+                ],
+                reservedTagNames = [
+                    'annotation-xml',
+                    'color-profile',
+                    'font-face',
+                    'font-face-format',
+                    'font-face-name',
+                    'font-face-src',
+                    'font-face-uri',
+                    'missing-glyph'
+                ];
+            context('when defining an autonomous custom element with an invalid name', function () {
+                invalidTagNames.forEach(function (name) {
+                    specify('<' + name + '>', function () {
+                        expect(function () {
+                            customElements.define(name, function () { });
+                        }).to.throwDOMException(SYNTAX_ERR);
+                    });
+                });
+            });
+            context('when defining a customized built-in element with an invalid name', function () {
+                invalidTagNames.forEach(function (name) {
+                    specify('<div is="' + name + '">', function () {
+                        expect(function () {
+                            customElements.define(name, function () { }, { 'extends': 'div' });
+                        }).to.throwDOMException(SYNTAX_ERR);
+                    });
+                });
+            });
+            context('when defining an autonomous custom element with a reserved tag name', function () {
+                reservedTagNames.forEach(function (name) {
+                    specify('<' + name + '>', function () {
+                        expect(function () {
+                            customElements.define(name, function () { });
+                        }).to.throwDOMException(SYNTAX_ERR);
+                    });
+                });
+            });
+            context('when defining a customized built-in element with a reserved tag name', function () {
+                reservedTagNames.forEach(function (name) {
+                    specify('<div is="' + name + '">', function () {
+                        expect(function () {
+                            customElements.define(name, function () { });
+                        }).to.throwDOMException(SYNTAX_ERR);
                     });
                 });
             });
         });
     });
 
-    api.run = function () {
-        var runner = mocha.run();
-        runner.on('end', function () {
-            var results = runner.stats;
-            results.reports = reports;
-            global.mochaResults = results;
-        });
-        runner.on('fail', logResult);
-        runner.on('pass', logResult);
-        return runner;
-    };
+    describe('CustomElementRegistry.prototype.get()', function () {
+        var descriptor = Object.getOwnPropertyDescriptor(CustomElementRegistry.prototype, 'get');
 
-    if (!global.Promise) {
-        loadScript('../lib/es6-promise.auto.min.js');
-    }
-    
+        it('should be a property of CustomElementRegistry.prototype', function () {
+            expect(descriptor).to.be.an('object');
+        });
+        it('should be a configurable property', function () {
+            expect(descriptor.configurable).to.be(true);
+        });
+        it('should be an enumerable property', function () {
+            expect(descriptor.enumerable).to.be(true);
+        });
+        it('should be a writable property', function () {
+            expect(descriptor.writable).to.be(true);
+        });
+        it('should be a function', function () {
+            expect(CustomElementRegistry.prototype.define).to.be.a('function');
+        });
+    });
+
+    describe('CustomElementRegistry.prototype.whenDefined()', function () {
+        var descriptor = Object.getOwnPropertyDescriptor(CustomElementRegistry.prototype, 'whenDefined');
+
+        it('should be a property of CustomElementRegistry.prototype', function () {
+            expect(descriptor).to.be.an('object');
+        });
+        it('should be a configurable property', function () {
+            expect(descriptor.configurable).to.be(true);
+        });
+        it('should be an enumerable property', function () {
+            expect(descriptor.enumerable).to.be(true);
+        });
+        it('should be a writable property', function () {
+            expect(descriptor.writable).to.be(true);
+        });
+        it('should be a function', function () {
+            expect(CustomElementRegistry.prototype.define).to.be.a('function');
+        });
+    });
+
+    //permutate({
+    //    defineEarly: [true, false],
+    //    isClass: supportsClasses ? [true, false] : false,
+    //    localName: Object.getOwnPropertyNames(builtInElements).concat(null)
+    //}, [
+    //    'observedAttributes'
+    //]).forEach(function (options) {
+    //    new TestElementDefinition(options);
+    //});
+
 })(window);

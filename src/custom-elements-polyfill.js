@@ -262,11 +262,16 @@
             }
             /** @returns {object} */
             return function getOwnPropertyDescriptors(O) {
-                var p = {};
-                getOwnPropertyNames(O).forEach(function (n) {
-                    p[n] = getOwnPropertyDescriptor(O, n);
-                });
-                return p;
+                var names = getOwnPropertyNames(O),
+                    i = 0,
+                    l = names.length,
+                    result = {},
+                    name;
+                while (i < l) {
+                    name = names[i++];
+                    result[name] = getOwnPropertyDescriptor(O, name);
+                }
+                return result;
             };
         })();
 
@@ -665,6 +670,13 @@
         return native.instance;
     }
 
+    /*
+     * All of the remaining functionality beyond this point assumes that the above check
+     * failed; that is, either (a) the native customElements implementation supports
+     * autonomous custom elements and NOT customized built-in elements, or (b) there is
+     * no native customElements implementation at all.
+     */
+
     (function customElementsPolyfill() {
         
         /**
@@ -805,7 +817,7 @@
             shim;
 
         (function DOMExceptionPolyfill() {
-            var codes,
+            var codes, props, constructDOMException, names, i, descriptors, code,
                 hasDOMException = (function () {
                     if (typeof DOMException !== 'function') {
                         return false;
@@ -820,6 +832,7 @@
             if (hasDOMException) {
                 return;
             }
+            props = new WeakMap();
             codes = {
                 IndexSizeError: { code: 1, constant: 'INDEX_SIZE_ERR' },
                 HierarchyRequestError: { code: 3, constant: 'HIERARCHY_REQUEST_ERR' },
@@ -843,33 +856,77 @@
                 InvalidNodeTypeError: { code: 24, constant: 'INVALID_NODE_TYPE_ERR' },
                 DataCloneError: { code: 25, constant: 'DATA_CLONE_ERR' }
             };
-            DOMException = function DOMException(message, name) {
-                Error.call(this);
+            names = getOwnPropertyNames(codes);
+            constructDOMException = function constructDOMException(err, message, name) {
+                if (!(err instanceof DOMException) || props.has(err)) {
+                    throw new TypeError("Failed to construct 'DOMException': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
+                }
                 name = (name === undefined) ? 'Error' : String(name);
-                defineProperties(this, {
-                    code: {
-                        value: hasOwnProperty(codes, name) ? codes[name].code : 0
-                    },
-                    message: {
-                        value: message == null ? '' : String(message)
-                    },
-                    name: {
-                        value: name
-                    }
+                props.set(err, {
+                    code: hasOwnProperty(codes, name) ? codes[name].code : 0,
+                    message: message === undefined ? '' : String(message),
+                    name: name
                 });
             };
-            DOMException.prototype = create(Error.prototype);
-            DOMException.prototype.constructor = DOMException;
-            for (var name in codes) {
-                if (hasOwnProperty(codes, name)) {
-                    defineProperty(DOMException, codes[name].constant, {
-                        configurable: false,
-                        enumerable: true,
-                        writable: false,
-                        value: codes[name].code
-                    });
-                }
+            if (supportsClasses) {
+                DOMException = eval('(function () { return function (Error, constructDOMException) { return class DOMException extends Error { constructor(message, name) { super(message); constructDOMException(this, message, name); } }; }; })()')(Error, constructDOMException);
+            } else {
+                DOMException = function DOMException(message, name) {
+                    constructDOMException(this, message, name);
+                    Error.call(this);
+                };
+                DOMException.prototype = create(Error.prototype);
+                DOMException.prototype.constructor = DOMException;
             }
+
+            descriptors = {};
+            i = names.length;
+            while (i--) {
+                code = codes[names[i]];
+                descriptors[code.constant] = {
+                    enumerable: true,
+                    value: code.code
+                };
+            }
+
+            defineProperties(DOMException, descriptors);
+            defineProperties(DOMException.prototype, descriptors);
+            defineProperties(DOMException.prototype, {
+                code: {
+                    configurable: true,
+                    enumerable: true,
+                    get: function () {
+                        var p = this instanceof DOMException ? props.get(this) : null;
+                        if (!p) {
+                            throw new TypeError(ILLEGAL_INVOCATION);
+                        }
+                        return p.code;
+                    }
+                },
+                message: {
+                    configurable: true,
+                    enumerable: true,
+                    get: function () {
+                        var p = this instanceof DOMException ? props.get(this) : null;
+                        if (!p) {
+                            throw new TypeError(ILLEGAL_INVOCATION);
+                        }
+                        return p.message;
+                    }
+                },
+                name: {
+                    configurable: true,
+                    enumerable: true,
+                    get: function () {
+                        var p = this instanceof DOMException ? props.get(this) : null;
+                        if (!p) {
+                            throw new TypeError(ILLEGAL_INVOCATION);
+                        }
+                        return p.name;
+                    }
+                }
+            });
+
             global.DOMException = DOMException;
         })();
 
@@ -1644,22 +1701,22 @@
 
                     //  6.1.4.  If `result`'s attribute list is not empty, then throw a NotSupportedError.
                     if (Element_get_attributes.call(element).length > 0) {
-                        throw new DOMException(failedToConstruct + 'The resulting element must not have any attributes.', DOMException.NOT_SUPPORTED_ERR);
+                        throw new DOMException(failedToConstruct + 'The resulting element must not have any attributes.', 'NotSupportedError');
                     }
 
                     //  6.1.5.  If `result` has children, then throw a NotSupportedError.
                     if (Node_get_firstChild.call(element) !== null) {
-                        throw new DOMException(failedToConstruct + 'The resulting element must not have any child nodes.', DOMException.NOT_SUPPORTED_ERR);
+                        throw new DOMException(failedToConstruct + 'The resulting element must not have any child nodes.', 'NotSupportedError');
                     }
 
                     //  6.1.6.  If `result`'s parent is not null, then throw a NotSupportedError.
                     if (this.parentNodeChanged && Node_get_parentNode.call(element) !== null) {
-                        throw new DOMException(failedToConstruct + 'The resulting element must not have a parent node.', DOMException.NOT_SUPPORTED_ERR);
+                        throw new DOMException(failedToConstruct + 'The resulting element must not have a parent node.', 'NotSupportedError');
                     }
 
                     //  6.1.7.  If `result`'s node document is not `document`, then throw a NotSupportedError.
                     if (Node_get_ownerDocument.call(element) !== this.originalDocument) {
-                        throw new DOMException(failedToConstruct + 'The resulting element must belong to the same document for which it was created.', DOMException.NOT_SUPPORTED_ERR);
+                        throw new DOMException(failedToConstruct + 'The resulting element must belong to the same document for which it was created.', 'NotSupportedError');
                     }
 
                     //  6.1.8.  If `result`'s namespace is not the HTML namespace, then throw a NotSupportedError.
@@ -1669,7 +1726,7 @@
 
                     //  6.1.9.  If `result`'s local name is not equal to `localName`, then throw a NotSupportedError.
                     if (Element_get_localName.call(element) !== definition.localName) {
-                        throw new DOMException(failedToConstruct + "The resulting element's local name must match the local name specified by its custom element definition ('" + definition.localName + "').", DOMException.NOT_SUPPORTED_ERR);
+                        throw new DOMException(failedToConstruct + "The resulting element's local name must match the local name specified by its custom element definition ('" + definition.localName + "').", 'NotSupportedError');
                     }
 
                     this.isConformant = true;
@@ -2620,7 +2677,7 @@
                 // 10.  If SameValue(constructResult.[[value]], `element`) is false, then throw an
                 //      "InvalidStateError" DOMException and terminate these steps.
                 if (constructResult !== props.element) {
-                    throw new DOMException("Custom element constructors cannot return a different object.", DOMException.INVALID_STATE_ERR);
+                    throw new DOMException("Custom element constructors cannot return a different object.", 'InvalidStateError');
                 }
 
                 // 11.  Set `element`'s custom element state to "custom".
@@ -2741,7 +2798,7 @@
         CustomElementRegistry = (function def_CustomElementRegistry() {
 
             var isRunning = false,
-                nativeDefinitions = {},
+                nativeConstructors = [],
                 /**
                  * A dictionary where each key is the name of a custom element whose definition
                  *   is being awaited, and each value is a function that resolves the Promise
@@ -2767,6 +2824,13 @@
             }
 
             /**
+             * @returns {string}
+             */
+            function constructorInUseError() {
+                return methodError('define', 'The provided constructor has already been used with this registry.');
+            }
+
+            /**
              * @param {string} method
              * @param {string} tagName
              * @returns {string}
@@ -2776,18 +2840,37 @@
             }
 
             /**
+             * @param {string} tagName
+             * @returns {string}
+             */
+            function nameInUseError(tagName) {
+                return methodError('define', 'The custom element name "' + tagName + '" has already been used with this registry.');
+            }
+
+            /**
+             * @param {string} name
+             * @returns {?Promise}
+             */
+            function resolveWhenDefinedPromise(name) {
+                var promise, resolve;
+                if (hasOwnProperty(promiseResolvers, name)) {
+                    promise = promises[name];
+                    resolve = promiseResolvers[name];
+                    if (typeof resolve === 'function') {
+                        resolve();
+                    }
+                    delete promiseResolvers[name];
+                    delete promises[name];
+                }
+                return promise;
+            }
+
+            /**
              * @param {string} name
              * @param {function} resolve
              */
             function whenDefinedExecutor(name, resolve) {
                 promiseResolvers[name] = resolve;
-            }
-
-            /**
-             * @param {string} name
-             */
-            function whenDefinedNativeResolver(name) {
-                nativeDefinitions[name] = true;
             }
 
             /**
@@ -2808,80 +2891,94 @@
              * @param {function} constructor - The constructor function for the custom element.
              * @param {ElementDefinitionOptions} [options] - An optional set of options.
              */
-            CustomElementRegistry.prototype.define = function (name, constructor, options) {
+            CustomElementRegistry.prototype.define = function define(name, constructor, options) {
 
-                var proxy, extend, localName, error, prototype, callbacks, callbackName, observedAttributes,
-                    attributes, definition, resolver, upgradeCandidates, i, l, args, candidates, c;
+                var validateArguments, extend, localName, prototype, callbacks, callbackName,
+                    observedAttributes, attributes, definition, upgradeCandidates, i, l, args,
+                    candidates, c;
 
                 if (!(this instanceof CustomElementRegistry)) {
                     throw new TypeError(methodError('define', "'this' is not a CustomElementRegistry object."));
                 }
 
-                extend = (options && hasOwnProperty(options, 'extends') && options.extends != null) ? String(options.extends) : null
-
-                if (native && !extend) {
-                    i = 0;
-                    l = arguments.length;
-                    args = [];
-
-                    while (i < l) {
-                        args[i] = arguments[i];
-                        i++;
-                    }
-                    if (typeof constructor === 'function') {
-                        args[1] = getProxiedConstructor(constructor);
-                    }
-                    native.prototype.define.apply(native.instance, args);
-
-                    // If the above call to the native "customElements.define" method succeeds,
-                    // we need to remember that the native implementation has a definition with
-                    // the provided name. If the call fails, it will throw an exception and we
-                    // won't reach this point.
-                    nativeDefinitions[name] = true;
-                    return;
+                if (typeof constructor === 'function') {
+                    constructor = getProxiedConstructor(constructor);
                 }
-                
-                // Argument validation
-                if (arguments.length < 2) {
-                    throw new TypeError(methodError('define', '2 arguments required, but only ' + arguments.length + ' present.'));
-                }
-                if (options != null && !(options instanceof Object)) {
-                    throw new TypeError(methodError('define', "Parameter 3 ('options') is not an object."));
-                }
+                extend = (options && hasOwnProperty(options, 'extends') && options.extends != null) ? String(options.extends) : null;
+                name = String(name);
+                validateArguments = native ? !!extend : true;
 
                 // HTML Standard: "Custom Element Definition" algorithm
                 // https://html.spec.whatwg.org/multipage/scripting.html#element-definition
-
+                
                 // 1.   If IsConstructor(`constructor`) is false, then throw a TypeError and
                 //      abort these steps.
-                if (typeof constructor !== 'function') {
-                    throw new TypeError(methodError('define', "Parameter 2 ('constructor') is not a function."));
-                }
-
                 // 2.   If `name` is not a valid custom element name, then throw a "SyntaxError"
                 //      DOMException and abort these steps.
-                name = String(name);
-                if (!isValidCustomElementName(name)) {
-                    throw new DOMException(invalidNameError('define', name), 'SyntaxError');
+
+                // Argument validations (including steps 1 and 2 of the algorithm) only take
+                // place if the definition process can't be handed off to the native
+                // customElements implementation.
+                if (validateArguments) {
+                    if (arguments.length < 2) {
+                        throw new TypeError(methodError('define', '2 arguments required, but only ' + arguments.length + ' present.'));
+                    }
+                    if (options != null && !(options instanceof Object)) {
+                        throw new TypeError(methodError('define', "Parameter 3 ('options') is not an object."));
+                    }
+                    if (typeof constructor !== 'function') {
+                        throw new TypeError(methodError('define', "Parameter 2 ('constructor') is not a function."));
+                    }
+                    if (!isValidCustomElementName(name)) {
+                        throw new DOMException(invalidNameError('define', name), 'SyntaxError');
+                    }
                 }
 
                 // 3.   If this CustomElementRegistry contains an entry with name `name`,
                 //      then throw a "NotSupportedError" DOMException and abort these steps.
-                if (Definition.fromName(name)) {
-                    throw new DOMException(methodError('define', 'The custom element name "' + name + '" has already been used with this registry.'), 'NotSupportedError');
+                if (Definition.fromName(name) || (native && native.get(name))) {
+                    // If a native customElements implementation exists and the current definition
+                    // is for an autonomous custom element, then the check for an existing definition
+                    // via Definition.fromName() has already been made, and we don't need to repeat it.
+                    throw new DOMException(nameInUseError(name), 'NotSupportedError');
                 }
 
                 // 4.   If this CustomElementRegistry contains an entry with constructor
                 //      `constructor`, then throw a "NotSupportedError" DOMException and
                 //      abort these steps.
                 if (Definition.fromConstructor(constructor)) {
-                    throw new DOMException(methodError('define', 'The provided constructor has already been used with this registry.'), 'NotSupportedError');
+                    throw new DOMException(constructorInUseError(), 'NotSupportedError');
+                } else if (native) {
+                    i = nativeConstructors.length;
+                    while (i--) {
+                        if (nativeConstructors[i] === constructor) {
+                            throw new DOMException(constructorInUseError(), 'NotSupportedError');
+                        }
+                    }
                 }
-                proxy = getProxiedConstructor(constructor);
-                if (proxy !== constructor && Definition.fromConstructor(proxy)) {
-                    throw new DOMException(methodError('define', 'The provided constructor has already been used with this registry.'), 'NotSupportedError');
+
+                if (native && !extend) {
+                    // At this point, if a native customElements implementation exists, and the
+                    // definition is for an autonomous custom element, then we defer to the
+                    // native define() method.
+                    args = [];
+                    i = arguments.length;
+                    while (i--) {
+                        args[i] = i === 1 ? constructor : arguments[i];
+                    }
+                    isRunning = true;
+                    try {
+                        native.define.apply(native.instance, args);
+                    } finally {
+                        isRunning = false;
+                    }
+                    constructor = native.get(name);
+                    if (constructor) {
+                        nativeConstructors[nativeConstructors.length] = constructor;
+                        resolveWhenDefinedPromise(name);
+                    }
+                    return;
                 }
-                constructor = proxy;
 
                 // 5.   Let `localName` be `name`.
                 localName = name;
@@ -2980,22 +3077,17 @@
                         }
                     }
 
-                } catch (ex) {
-                    error = ex;
-                }
+                } finally {
+                    // 10.  (continued)
+                    //      Then, perform the following substep, regardless of whether the above
+                    //      steps threw an exception or not:
+                    //
+                    //      1.  Unset this CustomElementRegistry's "element definition is running" flag.
+                    isRunning = false;
 
-                // 10.  (continued)
-                //      Then, perform the following substep, regardless of whether the above
-                //      steps threw an exception or not:
-                //
-                //      1.  Unset this CustomElementRegistry's "element definition is running" flag.
-                isRunning = false;
-
-                // 10.  (continued)
-                //      Finally, if the first set of substeps threw an exception, then rethrow
-                //      that exception, and terminate this algorithm. Otherwise, continue onward.
-                if (error) {
-                    throw error;
+                    // 10.  (continued)
+                    //      Finally, if the first set of substeps threw an exception, then rethrow
+                    //      that exception, and terminate this algorithm. Otherwise, continue onward.
                 }
                 
                 // 11.  Let `definition` be a new custom element definition with name `name`, local
@@ -3039,18 +3131,11 @@
 
                 // 16.  If this CustomElementRegistry's when-defined promise map contains an entry
                 //      with key `name`:
-                if (promiseResolvers.hasOwnProperty(name)) {
-                    // 16.1.    Let `promise` be the value of that entry.
-                    // 16.2.    Resolve `promise` with `undefined`.
-                    // 16.3.    Delete the entry with key `name` from this CustomElementRegistry's
-                    //          when-defined promise map.
-                    resolver = promiseResolvers[name];
-                    if (typeof resolver === 'function') {
-                        resolver();
-                    }
-                    delete promiseResolvers[name];
-                    delete promises[name];
-                }
+                // 16.1.    Let `promise` be the value of that entry.
+                // 16.2.    Resolve `promise` with `undefined`.
+                // 16.3.    Delete the entry with key `name` from this CustomElementRegistry's
+                //          when-defined promise map.
+                resolveWhenDefinedPromise(name);
             };
 
             /**
@@ -3064,7 +3149,7 @@
              *   with the provided name, or undefined if this registry does not contain a custom
              *   element definition with the provided name.
              */
-            CustomElementRegistry.prototype.get = function (name) {
+            CustomElementRegistry.prototype.get = function get(name) {
                 var definition;
                 if (!(this instanceof CustomElementRegistry)) {
                     throw new TypeError(methodError('get', "'this' is not a CustomElementRegistry object."));
@@ -3073,17 +3158,12 @@
                     throw new TypeError(methodError('get', '1 argument required, but only 0 present.'));
                 }
                 if (native) {
-                    definition = nativeDefinitions[name];
+                    definition = native.get(name);
                     if (definition) {
-                        return definition;
-                    }
-                    definition = native.prototype.get.call(native.instance, name);
-                    if (definition) {
-                        nativeDefinitions[name] = definition;
                         return definition;
                     }
                 }
-                definition = Definition.fromName(String(name).toLowerCase());
+                definition = Definition.fromName(String(name));
                 return definition ? definition.constructor : undefined;
             };
 
@@ -3096,8 +3176,8 @@
              *   registered with this CustomElementRegistry that has the provided name. If the given
              *   name is not a valid custom element name, then the returned Promise is rejected immediately.
              */
-            CustomElementRegistry.prototype.whenDefined = function (name) {
-                var promise, nativePromise;
+            CustomElementRegistry.prototype.whenDefined = function whenDefined(name) {
+                var promise;
 
                 if (!(this instanceof CustomElementRegistry)) {
                     return Promise.reject(new TypeError(methodError('whenDefined', "'this' is not a CustomElementRegistry object.")));
@@ -3106,42 +3186,31 @@
                     return Promise.reject(new TypeError(methodError('whenDefined', '1 argument required, but only 0 present.')))
                 }
 
+                name = String(name);
+
                 // HTML Standard: CustomElementRegistry.prototype.whenDefined() specification
                 // https://html.spec.whatwg.org/multipage/scripting.html#dom-customelementregistry-whendefined
 
-                // Steps are rearranged for improved efficiency.
-
-                name = String(name);
+                // 1.   If `name` is not a valid custom element name, then return a new promise
+                //      rejected with a "SyntaxError" DOMException and abort these steps.
+                if (!isValidCustomElementName(name)) {
+                    return Promise.reject(new DOMException(invalidNameError('whenDefined', name), 'SyntaxError'));
+                }
 
                 // 2.   If this CustomElementRegistry contains an entry with name `name`, then return
                 //      a new promise resolved with `undefined` and abort these steps.
-                if (Definition.fromName(name) || (native && hasOwnProperty(nativeDefinitions, name))) {
+                if (Definition.fromName(name) || (native && native.get(name))) {
                     return Promise.resolve();
-                }
-
-                if (native) {
-                    // Rely on the native implementation to validate the custom element name.
-                    nativePromise = native.prototype.whenDefined.call(native.instance, name);
-                } else {
-                    // 1.   If `name` is not a valid custom element name, then return a new promise
-                    //      rejected with a "SyntaxError" DOMException and abort these steps.
-                    if (!isValidCustomElementName(name)) {
-                        return Promise.reject(new DOMException(invalidNameError('whenDefined', name), 'SyntaxError'));
-                    }
                 }
 
                 // 3.   Let `map` be this CustomElementRegistry's when-defined promise map.
                 // 4.   If `map` does not contain an entry with key `name`, create an entry in `map`
                 //      with key `name` and whose value is a new promise.
                 // 5.   Let `promise` be the value of the entry in `map` with key `name`.
-                if (promises.hasOwnProperty(name)) {
+                if (!hasOwnProperty(promises, name)) {
                     promise = promises[name];
                 } else {
                     promise = new Promise(whenDefinedExecutor.bind(null, name));
-                    if (nativePromise) {
-                        nativePromise.then(whenDefinedNativeResolver.bind(null, name));
-                        promise = Promise.race([promise, nativePromise]);
-                    }
                     promises[name] = promise;
                 }
 
@@ -3478,7 +3547,7 @@
                     close: function close() {
                         var info = DocumentInfo.getOrCreate(this);
                         if (info && info.throwOnDynamicMarkupInsertionCounter > 0) {
-                            throw new DOMException(getDocumentMarkupInsertionError('close'), DOMException.INVALID_STATE_ERR);
+                            throw new DOMException(getDocumentMarkupInsertionError('close'), 'InvalidStateError');
                         }
                         return Document_close.apply(this, arrayFrom(arguments));
                     },
@@ -3546,21 +3615,21 @@
                         }
                         info = DocumentInfo.getOrCreate(this);
                         if (info && info.throwOnDynamicMarkupInsertionCounter > 0) {
-                            throw new DOMException(getDocumentMarkupInsertionError('open'), DOMException.INVALID_STATE_ERR);
+                            throw new DOMException(getDocumentMarkupInsertionError('open'), 'InvalidStateError');
                         }
                         return Document_open.apply(this, arrayFrom(arguments));
                     },
                     write: function write() {
                         var info = DocumentInfo.getOrCreate(this);
                         if (info && info.throwOnDynamicMarkupInsertionCounter > 0) {
-                            throw new DOMException(getDocumentMarkupInsertionError('write'), DOMException.INVALID_STATE_ERR);
+                            throw new DOMException(getDocumentMarkupInsertionError('write'), 'InvalidStateError');
                         }
                         return Document_write.apply(this, arrayFrom(arguments));
                     },
                     writeln: function writeln() {
                         var info = DocumentInfo.getOrCreate(this);
                         if (info && info.throwOnDynamicMarkupInsertionCounter > 0) {
-                            throw new DOMException(getDocumentMarkupInsertionError('writeln'), DOMException.INVALID_STATE_ERR);
+                            throw new DOMException(getDocumentMarkupInsertionError('writeln'), 'InvalidStateError');
                         }
                         return Document_writeln.apply(this, arrayFrom(arguments));
                     }

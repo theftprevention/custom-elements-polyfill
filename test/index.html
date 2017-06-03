@@ -4,16 +4,17 @@
     <meta charset="utf-8" />
     <title>custom-elements-polyfill</title>
     <link href="../lib/mocha.min.css" rel="stylesheet" />
+    <script src="../lib/es6-promise.auto.min.js"></script>
     <script src="../lib/expect.js"></script>
     <script src="../lib/mocha.min.js"></script>
 </head>
 <body>
     <div id="mocha"></div>
     <div id="test-container" style="display: none;"></div>
+    <script src="../dist/custom-elements-polyfill.js"></script>
     <script src="test-setup.js"></script>
-    <script src="../src/custom-elements-polyfill.js"></script>
     <script>
-        test.run();
+        util.runTests();
     </script>
 </body>
 </html>
