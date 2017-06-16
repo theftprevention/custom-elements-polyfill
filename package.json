@@ -16,14 +16,28 @@
   "bugs": {
     "url": "https://github.com/theftprevention/custom-elements-polyfill/issues"
   },
-  "dependencies": {},
+  "dependencies": {
+    "browserify": "^14.4.0",
+    "es6-promise": "^4.1.0"
+  },
   "devDependencies": {
+    "expect.js": "^0.3.1",
+    "mocha": "^3.4.2",
     "saucelabs": "^1.4.0",
     "selenium-webdriver": "^3.4.0",
     "uglify-js": "^3.0.11"
   },
   "scripts": {
-    "build": "node build/build.js",
-    "test": "node test/test-selenium.js"
+    "build": "node scripts/build-polyfill.js",
+    "test": "node scripts/test-sauce.js"
+  },
+  "files": [
+    "dist",
+    "lib",
+    "index.js",
+    "LICENSE"
+  ],
+  "browser": {
+    "./index.js": "./lib/browser/index.js"
   }
 }
