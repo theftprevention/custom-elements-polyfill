@@ -350,35 +350,41 @@ module.exports = (function () {
         getOwnPropertyNames = Object.getOwnPropertyNames,
         getOwnPropertySymbols = Object.getOwnPropertySymbols;
 
-    if (typeof Object.getOwnPropertyDescriptors === 'function') {
-        return Object.getOwnPropertyDescriptors;
+    if (typeof Object.getOwnPropertyDescriptors !== 'function') {
+        console.log('Polyfilling getOwnPropertyDescriptors');
+        Object.defineProperty(Object, 'getOwnPropertyDescriptors', {
+            configurable: true,
+            /**
+             * @param {object} O
+             * @returns {object}
+             */
+            value: function getOwnPropertyDescriptors(O) {
+                var names = getOwnPropertyNames(O),
+                    i = 0,
+                    l = names.length,
+                    result = {},
+                    name;
+                while (i < l) {
+                    name = names[i++];
+                    result[name] = getOwnPropertyDescriptor(O, name);
+                }
+                if (getOwnPropertySymbols) {
+                    names = getOwnPropertySymbols;
+                    i = 0;
+                    l = names.length;
+                    while (i < l) {
+                        name = names[i++];
+                        result[name] = getOwnPropertyDescriptor(O, name);
+                    }
+                }
+                return result;
+            },
+            writable: true
+        });
     }
 
-    /**
-     * @param {object} O
-     * @returns {object}
-     */
-    return function getOwnPropertyDescriptors(O) {
-        var names = getOwnPropertyNames(O),
-            i = 0,
-            l = names.length,
-            result = {},
-            name;
-        while (i < l) {
-            name = names[i++];
-            result[name] = getOwnPropertyDescriptor(O, name);
-        }
-        if (getOwnPropertySymbols) {
-            names = getOwnPropertySymbols;
-            i = 0;
-            l = names.length;
-            while (i < l) {
-                name = names[i++];
-                result[name] = getOwnPropertyDescriptor(O, name);
-            }
-        }
-        return result;
-    };
+    return Object.getOwnPropertyDescriptors;
+    
 })();
 
 },{}],4:[function(require,module,exports){
