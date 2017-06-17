@@ -18463,21 +18463,18 @@ var builtInElements = require('../lib/browser/built-in-elements'),
  */
 function logResult(test, err) {
     var passed = !err,
-        result = {
+        report;
+    if (!passed) {
+        report = {
+            message: err.message || String(err),
             name: flattenTitles(test),
-            result: passed
+            result: false
         };
-    if (!passed && err) {
-        if (err.message) {
-            result.message = err.message;
-        } else {
-            result.message = String(err);
+        if (err.stack) {
+            report.stack = err.stack;
         }
-        if (result.stack) {
-            result.stack = err.stack;
-        }
+        reports.push(report);
     }
-    reports.push(result);
 }
 
 function onDocumentReady() {

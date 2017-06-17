@@ -55,7 +55,7 @@ const whenJobsCompleted = (function () {
                     remaining = 0;
                     for (i = 0, l = tests.length; i < l; i++) {
                         test = tests[i];
-                        if ((test.result && test.result.pending === 0) || (test.status && String(test.status).toLowerCase() === 'test error')) {
+                        if (test.result === null || (test.result && test.result.pending === 0) || (test.status && String(test.status).toLowerCase() === 'test error')) {
                             j = runningJobIds.length;
                             while (j--) {
                                 if (runningJobIds[j] === test.id) {
