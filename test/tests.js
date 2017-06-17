@@ -1,9 +1,10 @@
 /// <reference path="../../node_modules/mocha/mocha.js" />
-
 'use strict';
 
+require('expect.js');
+require('mocha');
+
 var builtInElements = require('../lib/browser/built-in-elements'),
-    mocha = require('mocha').mocha,
     util = require('./util'),
 
     flattenTitles = util.flattenTitles,

@@ -1,11 +1,11 @@
 'use strict';
 
+require('expect.js')
 require('../lib/browser/other-polyfills/Object.getOwnPropertyDescriptors');
 
 var builtInElements = require('../lib/browser/built-in-elements'),
     container = document.getElementById('test-container'),
     definitions = {},
-    expect = require('expect.js') || window.expect,
     domExCodes = {
         IndexSizeError: 1,
         HierarchyRequestError: 3,
