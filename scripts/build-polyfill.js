@@ -4,7 +4,9 @@ const
     build = require('../index').build(),
     fs = require('fs'),
     pathTo = require('../lib/path-to'),
-    minify = require('uglify-js').minify;
+    minify = require('uglify-js').minify,
+        
+    noop = function () { };
 
 build.bundle(function (err, buffer) {
     var content, min, i, l;
@@ -24,7 +26,7 @@ build.bundle(function (err, buffer) {
         }
     }
 
-    fs.writeFile(pathTo('dist/custom-elements-polyfill.js'), content, 'utf8');
-    fs.writeFile(pathTo('dist/custom-elements-polyfill.min.js'), min.code, 'utf8');
+    fs.writeFile(pathTo('dist/custom-elements-polyfill.js'), content, 'utf8', noop);
+    fs.writeFile(pathTo('dist/custom-elements-polyfill.min.js'), min.code, 'utf8', noop);
     
 });

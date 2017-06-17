@@ -108,86 +108,82 @@ const whenJobsCompleted = (function () {
 
 })();
 
-buildTests().then(function () {
-    if (sauce) {
+if (sauce) {
 
-        console.log('Using Sauce Connect.');
-        console.log('Travis Job Number:   ' + process.env.TRAVIS_JOB_NUMBER);
-        console.log('Travis Build Number: ' + process.env.TRAVIS_BUILD_NUMBER);
+    console.log('Using Sauce Connect.');
+    console.log('Travis Job Number:   ' + process.env.TRAVIS_JOB_NUMBER);
+    console.log('Travis Build Number: ' + process.env.TRAVIS_BUILD_NUMBER);
 
-        //browser = new webdriver.Builder()
-        //    .usingServer('http://' + username + ':' + accessKey + '@ondemand.saucelabs.com:80/wd/hub')
-        //    .withCapabilities(webdriver.Capabilities.chrome().merge({
-        //        'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
-        //        build: process.env.TRAVIS_BUILD_NUMBER,
-        //        username: username,
-        //        accessKey: accessKey
-        //    }))
-        //    .build();
-        //
-        //browser.getSession().then(function (session) {
-        //    console.log('Session ID is ' + (session && typeof session.getId === 'function' ? '"' + session.getId() + '"' : 'unavailable') + '.');
-        //    return browser.get('http://localhost:8000/test/index.html');
-        //}).then(function () {
-        //    return browser.wait(until.elementLocated(by.id('results')), 80000);
-        //}).then(function (resultContainer) {
-        //    return resultContainer.getText();
-        //}).then(function (resultText) {
-        //    console.log('Results:')
-        //    console.log(resultText);
-        //
-        //    browser.quit();
-        //});
+    //browser = new webdriver.Builder()
+    //    .usingServer('http://' + username + ':' + accessKey + '@ondemand.saucelabs.com:80/wd/hub')
+    //    .withCapabilities(webdriver.Capabilities.chrome().merge({
+    //        'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
+    //        build: process.env.TRAVIS_BUILD_NUMBER,
+    //        username: username,
+    //        accessKey: accessKey
+    //    }))
+    //    .build();
+    //
+    //browser.getSession().then(function (session) {
+    //    console.log('Session ID is ' + (session && typeof session.getId === 'function' ? '"' + session.getId() + '"' : 'unavailable') + '.');
+    //    return browser.get('http://localhost:8000/test/index.html');
+    //}).then(function () {
+    //    return browser.wait(until.elementLocated(by.id('results')), 80000);
+    //}).then(function (resultContainer) {
+    //    return resultContainer.getText();
+    //}).then(function (resultText) {
+    //    console.log('Results:')
+    //    console.log(resultText);
+    //
+    //    browser.quit();
+    //});
 
-        sauce.send({
-            method: 'POST',
-            path: ':username/js-tests',
-            data: {
-                url: 'http://localhost:8000/test/browser/index.html',
-                platforms: [
-                    ['Windows 7', 'internet explorer', '11'],
-                    ['Windows 10', 'chrome', '58'],
-                    ['Windows 10', 'MicrosoftEdge', '14'],
-                    ['macOS 10.12', 'firefox', '53'],
-                    ['Mac 10.11', 'iphone', '10.2']
-                ],
-                framework: 'mocha',
-                'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
-                build: process.env.TRAVIS_BUILD_NUMBER,
-                recordScreenshots: true,
-                recordVideo: true
-            }
-        }, function (err, response) {
-            var newJobIds, i, j, l;
-            if (err) {
-                throw err;
-            }
-            if (typeof response === 'string') {
-                response = JSON.parse(response);
-            }
+    sauce.send({
+        method: 'POST',
+        path: ':username/js-tests',
+        data: {
+            url: 'http://localhost:8000/test/browser/index.html',
+            platforms: [
+                ['Windows 7', 'internet explorer', '11'],
+                ['Windows 10', 'chrome', '58'],
+                ['Windows 10', 'MicrosoftEdge', '14'],
+                ['macOS 10.12', 'firefox', '53'],
+                ['Mac 10.11', 'iphone', '10.2']
+            ],
+            framework: 'mocha',
+            'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
+            build: process.env.TRAVIS_BUILD_NUMBER,
+            recordScreenshots: true,
+            recordVideo: true
+        }
+    }, function (err, response) {
+        var newJobIds, i, j, l;
+        if (err) {
+            throw err;
+        }
+        if (typeof response === 'string') {
+            response = JSON.parse(response);
+        }
 
-            console.log('POST ' + sauceApiUrl + ':username/js-tests');
-            console.log('  => ' + JSON.stringify(response));
+        console.log('POST ' + sauceApiUrl + ':username/js-tests');
+        console.log('  => ' + JSON.stringify(response));
 
-            if (response && response['js tests'] instanceof Array) {
-                newJobIds = response['js tests'];
-            } else {
-                newJobIds = [];
-            }
-            for (i = 0, j = runningJobIds.length, l = newJobIds.length; i < l; i++) {
-                runningJobIds[j++] = newJobIds[i];
-            }
+        if (response && response['js tests'] instanceof Array) {
+            newJobIds = response['js tests'];
+        } else {
+            newJobIds = [];
+        }
+        for (i = 0, j = runningJobIds.length, l = newJobIds.length; i < l; i++) {
+            runningJobIds[j++] = newJobIds[i];
+        }
 
-            console.log('All running jobs: ' + JSON.stringify(runningJobIds));
+        console.log('All running jobs: ' + JSON.stringify(runningJobIds));
 
-            whenJobsCompleted().then(function () {
-                console.log('Done! Terminating script.');
-            }).catch(function (error) {
-                throw error;
-            });
+        whenJobsCompleted().then(function () {
+            console.log('Done! Terminating script.');
+        }).catch(function (error) {
+            throw error;
         });
+    });
 
-    }
-}, function (err) {
-    throw err;
-});
+}
