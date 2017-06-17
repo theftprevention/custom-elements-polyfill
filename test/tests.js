@@ -3,7 +3,7 @@
 'use strict';
 
 var builtInElements = require('../lib/browser/built-in-elements'),
-    mocha = require('mocha') && window.mocha,
+    mocha = require('mocha').mocha,
     util = require('./util'),
 
     flattenTitles = util.flattenTitles,

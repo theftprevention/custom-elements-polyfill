@@ -3,10 +3,7 @@
 
 'use strict';
 
-var expect = require('expect.js') || window.expect,
-    mocha = require('mocha') || window.mocha,
-    Promise = require('es6-promise/auto') || window.Promise,
-    util = require('./util'),
+var util = require('./util'),
 
     domExCodes = util.domExCodes,
     invalidTagNames = util.invalidTagNames,

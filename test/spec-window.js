@@ -3,9 +3,6 @@
 
 'use strict';
 
-var expect = require('expect.js') || window.expect,
-    mocha = require('mocha') || window.mocha;
-
 describe('The global (window) object', function () {
     describe('\'CustomElementRegistry\' property', function () {
         var descriptor = Object.getOwnPropertyDescriptor(window, 'CustomElementRegistry');

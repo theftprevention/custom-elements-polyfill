@@ -3,9 +3,7 @@
 
 'use strict';
 
-var expect = require('expect.js') || window.expect,
-    mocha = require('mocha') || window.mocha,
-    util = require('./util'),
+var util = require('./util'),
         
     supportsClasses = util.supportsClasses;
 

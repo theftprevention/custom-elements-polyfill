@@ -1,25 +1,19 @@
 'use strict';
 
 const
-    build = require('../lib/build'),
+    build = require('../index').build(),
     fs = require('fs'),
-    path = require('path'),
-    minify = require('uglify-js').minify,
+    pathTo = require('../lib/path-to'),
+    minify = require('uglify-js').minify;
 
-    root = path.join(__dirname, '../'),
-    src = function (f) { return path.join(root, f); },
-
-    pkg = JSON.parse(fs.readFileSync(src('package.json'), 'utf8')),
-    reg_version = /\{VERSION_PLACEHOLDER\}/g;
-
-build(function (err, buffer) {
+build.bundle(function (err, buffer) {
     var content, min, i, l;
 
     if (err) {
         throw err;
     }
 
-    content = buffer.toString().replace(reg_version, pkg.version);
+    content = buffer.toString();
 
     min = minify(content, { warnings: true });
     if (min.error) {
@@ -30,7 +24,7 @@ build(function (err, buffer) {
         }
     }
 
-    fs.writeFile(src('dist/custom-elements-polyfill.js'), content, 'utf8');
-    fs.writeFile(src('dist/custom-elements-polyfill.min.js'), min.code, 'utf8');
+    fs.writeFile(pathTo('dist/custom-elements-polyfill.js'), content, 'utf8');
+    fs.writeFile(pathTo('dist/custom-elements-polyfill.min.js'), min.code, 'utf8');
     
 });

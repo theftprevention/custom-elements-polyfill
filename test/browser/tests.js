@@ -351,7 +351,6 @@ module.exports = (function () {
         getOwnPropertySymbols = Object.getOwnPropertySymbols;
 
     if (typeof Object.getOwnPropertyDescriptors !== 'function') {
-        console.log('Polyfilling getOwnPropertyDescriptors');
         Object.defineProperty(Object, 'getOwnPropertyDescriptors', {
             configurable: true,
             /**
@@ -534,7 +533,7 @@ BrowserStdout.prototype._write = function(chunks, encoding, cb) {
 }
 
 }).call(this,require('_process'))
-},{"_process":88,"stream":102,"util":107}],7:[function(require,module,exports){
+},{"_process":86,"stream":100,"util":105}],7:[function(require,module,exports){
 arguments[4][5][0].apply(exports,arguments)
 },{"dup":5}],8:[function(require,module,exports){
 /*!
@@ -2244,7 +2243,7 @@ function numberIsNaN (obj) {
   return obj !== obj // eslint-disable-line no-self-compare
 }
 
-},{"base64-js":4,"ieee754":32}],9:[function(require,module,exports){
+},{"base64-js":4,"ieee754":30}],9:[function(require,module,exports){
 (function (Buffer){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -2355,7 +2354,7 @@ function objectToString(o) {
 }
 
 }).call(this,{"isBuffer":require("../../is-buffer/index.js")})
-},{"../../is-buffer/index.js":34}],10:[function(require,module,exports){
+},{"../../is-buffer/index.js":32}],10:[function(require,module,exports){
 /*istanbul ignore start*/"use strict";
 
 exports.__esModule = true;
@@ -3607,1174 +3606,6 @@ function generateOptions(options, defaults) {
 
 
 },{}],26:[function(require,module,exports){
-// This file can be required in Browserify and Node.js for automatic polyfill
-// To use it:  require('es6-promise/auto');
-'use strict';
-module.exports = require('./').polyfill();
-
-},{"./":27}],27:[function(require,module,exports){
-(function (process,global){
-/*!
- * @overview es6-promise - a tiny implementation of Promises/A+.
- * @copyright Copyright (c) 2014 Yehuda Katz, Tom Dale, Stefan Penner and contributors (Conversion to ES6 API by Jake Archibald)
- * @license   Licensed under MIT license
- *            See https://raw.githubusercontent.com/stefanpenner/es6-promise/master/LICENSE
- * @version   4.1.0
- */
-
-(function (global, factory) {
-    typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory() :
-    typeof define === 'function' && define.amd ? define(factory) :
-    (global.ES6Promise = factory());
-}(this, (function () { 'use strict';
-
-function objectOrFunction(x) {
-  return typeof x === 'function' || typeof x === 'object' && x !== null;
-}
-
-function isFunction(x) {
-  return typeof x === 'function';
-}
-
-var _isArray = undefined;
-if (!Array.isArray) {
-  _isArray = function (x) {
-    return Object.prototype.toString.call(x) === '[object Array]';
-  };
-} else {
-  _isArray = Array.isArray;
-}
-
-var isArray = _isArray;
-
-var len = 0;
-var vertxNext = undefined;
-var customSchedulerFn = undefined;
-
-var asap = function asap(callback, arg) {
-  queue[len] = callback;
-  queue[len + 1] = arg;
-  len += 2;
-  if (len === 2) {
-    // If len is 2, that means that we need to schedule an async flush.
-    // If additional callbacks are queued before the queue is flushed, they
-    // will be processed by this flush that we are scheduling.
-    if (customSchedulerFn) {
-      customSchedulerFn(flush);
-    } else {
-      scheduleFlush();
-    }
-  }
-};
-
-function setScheduler(scheduleFn) {
-  customSchedulerFn = scheduleFn;
-}
-
-function setAsap(asapFn) {
-  asap = asapFn;
-}
-
-var browserWindow = typeof window !== 'undefined' ? window : undefined;
-var browserGlobal = browserWindow || {};
-var BrowserMutationObserver = browserGlobal.MutationObserver || browserGlobal.WebKitMutationObserver;
-var isNode = typeof self === 'undefined' && typeof process !== 'undefined' && ({}).toString.call(process) === '[object process]';
-
-// test for web worker but not in IE10
-var isWorker = typeof Uint8ClampedArray !== 'undefined' && typeof importScripts !== 'undefined' && typeof MessageChannel !== 'undefined';
-
-// node
-function useNextTick() {
-  // node version 0.10.x displays a deprecation warning when nextTick is used recursively
-  // see https://github.com/cujojs/when/issues/410 for details
-  return function () {
-    return process.nextTick(flush);
-  };
-}
-
-// vertx
-function useVertxTimer() {
-  if (typeof vertxNext !== 'undefined') {
-    return function () {
-      vertxNext(flush);
-    };
-  }
-
-  return useSetTimeout();
-}
-
-function useMutationObserver() {
-  var iterations = 0;
-  var observer = new BrowserMutationObserver(flush);
-  var node = document.createTextNode('');
-  observer.observe(node, { characterData: true });
-
-  return function () {
-    node.data = iterations = ++iterations % 2;
-  };
-}
-
-// web worker
-function useMessageChannel() {
-  var channel = new MessageChannel();
-  channel.port1.onmessage = flush;
-  return function () {
-    return channel.port2.postMessage(0);
-  };
-}
-
-function useSetTimeout() {
-  // Store setTimeout reference so es6-promise will be unaffected by
-  // other code modifying setTimeout (like sinon.useFakeTimers())
-  var globalSetTimeout = setTimeout;
-  return function () {
-    return globalSetTimeout(flush, 1);
-  };
-}
-
-var queue = new Array(1000);
-function flush() {
-  for (var i = 0; i < len; i += 2) {
-    var callback = queue[i];
-    var arg = queue[i + 1];
-
-    callback(arg);
-
-    queue[i] = undefined;
-    queue[i + 1] = undefined;
-  }
-
-  len = 0;
-}
-
-function attemptVertx() {
-  try {
-    var r = require;
-    var vertx = r('vertx');
-    vertxNext = vertx.runOnLoop || vertx.runOnContext;
-    return useVertxTimer();
-  } catch (e) {
-    return useSetTimeout();
-  }
-}
-
-var scheduleFlush = undefined;
-// Decide what async method to use to triggering processing of queued callbacks:
-if (isNode) {
-  scheduleFlush = useNextTick();
-} else if (BrowserMutationObserver) {
-  scheduleFlush = useMutationObserver();
-} else if (isWorker) {
-  scheduleFlush = useMessageChannel();
-} else if (browserWindow === undefined && typeof require === 'function') {
-  scheduleFlush = attemptVertx();
-} else {
-  scheduleFlush = useSetTimeout();
-}
-
-function then(onFulfillment, onRejection) {
-  var _arguments = arguments;
-
-  var parent = this;
-
-  var child = new this.constructor(noop);
-
-  if (child[PROMISE_ID] === undefined) {
-    makePromise(child);
-  }
-
-  var _state = parent._state;
-
-  if (_state) {
-    (function () {
-      var callback = _arguments[_state - 1];
-      asap(function () {
-        return invokeCallback(_state, child, callback, parent._result);
-      });
-    })();
-  } else {
-    subscribe(parent, child, onFulfillment, onRejection);
-  }
-
-  return child;
-}
-
-/**
-  `Promise.resolve` returns a promise that will become resolved with the
-  passed `value`. It is shorthand for the following:
-
-  ```javascript
-  let promise = new Promise(function(resolve, reject){
-    resolve(1);
-  });
-
-  promise.then(function(value){
-    // value === 1
-  });
-  ```
-
-  Instead of writing the above, your code now simply becomes the following:
-
-  ```javascript
-  let promise = Promise.resolve(1);
-
-  promise.then(function(value){
-    // value === 1
-  });
-  ```
-
-  @method resolve
-  @static
-  @param {Any} value value that the returned promise will be resolved with
-  Useful for tooling.
-  @return {Promise} a promise that will become fulfilled with the given
-  `value`
-*/
-function resolve(object) {
-  /*jshint validthis:true */
-  var Constructor = this;
-
-  if (object && typeof object === 'object' && object.constructor === Constructor) {
-    return object;
-  }
-
-  var promise = new Constructor(noop);
-  _resolve(promise, object);
-  return promise;
-}
-
-var PROMISE_ID = Math.random().toString(36).substring(16);
-
-function noop() {}
-
-var PENDING = void 0;
-var FULFILLED = 1;
-var REJECTED = 2;
-
-var GET_THEN_ERROR = new ErrorObject();
-
-function selfFulfillment() {
-  return new TypeError("You cannot resolve a promise with itself");
-}
-
-function cannotReturnOwn() {
-  return new TypeError('A promises callback cannot return that same promise.');
-}
-
-function getThen(promise) {
-  try {
-    return promise.then;
-  } catch (error) {
-    GET_THEN_ERROR.error = error;
-    return GET_THEN_ERROR;
-  }
-}
-
-function tryThen(then, value, fulfillmentHandler, rejectionHandler) {
-  try {
-    then.call(value, fulfillmentHandler, rejectionHandler);
-  } catch (e) {
-    return e;
-  }
-}
-
-function handleForeignThenable(promise, thenable, then) {
-  asap(function (promise) {
-    var sealed = false;
-    var error = tryThen(then, thenable, function (value) {
-      if (sealed) {
-        return;
-      }
-      sealed = true;
-      if (thenable !== value) {
-        _resolve(promise, value);
-      } else {
-        fulfill(promise, value);
-      }
-    }, function (reason) {
-      if (sealed) {
-        return;
-      }
-      sealed = true;
-
-      _reject(promise, reason);
-    }, 'Settle: ' + (promise._label || ' unknown promise'));
-
-    if (!sealed && error) {
-      sealed = true;
-      _reject(promise, error);
-    }
-  }, promise);
-}
-
-function handleOwnThenable(promise, thenable) {
-  if (thenable._state === FULFILLED) {
-    fulfill(promise, thenable._result);
-  } else if (thenable._state === REJECTED) {
-    _reject(promise, thenable._result);
-  } else {
-    subscribe(thenable, undefined, function (value) {
-      return _resolve(promise, value);
-    }, function (reason) {
-      return _reject(promise, reason);
-    });
-  }
-}
-
-function handleMaybeThenable(promise, maybeThenable, then$$) {
-  if (maybeThenable.constructor === promise.constructor && then$$ === then && maybeThenable.constructor.resolve === resolve) {
-    handleOwnThenable(promise, maybeThenable);
-  } else {
-    if (then$$ === GET_THEN_ERROR) {
-      _reject(promise, GET_THEN_ERROR.error);
-      GET_THEN_ERROR.error = null;
-    } else if (then$$ === undefined) {
-      fulfill(promise, maybeThenable);
-    } else if (isFunction(then$$)) {
-      handleForeignThenable(promise, maybeThenable, then$$);
-    } else {
-      fulfill(promise, maybeThenable);
-    }
-  }
-}
-
-function _resolve(promise, value) {
-  if (promise === value) {
-    _reject(promise, selfFulfillment());
-  } else if (objectOrFunction(value)) {
-    handleMaybeThenable(promise, value, getThen(value));
-  } else {
-    fulfill(promise, value);
-  }
-}
-
-function publishRejection(promise) {
-  if (promise._onerror) {
-    promise._onerror(promise._result);
-  }
-
-  publish(promise);
-}
-
-function fulfill(promise, value) {
-  if (promise._state !== PENDING) {
-    return;
-  }
-
-  promise._result = value;
-  promise._state = FULFILLED;
-
-  if (promise._subscribers.length !== 0) {
-    asap(publish, promise);
-  }
-}
-
-function _reject(promise, reason) {
-  if (promise._state !== PENDING) {
-    return;
-  }
-  promise._state = REJECTED;
-  promise._result = reason;
-
-  asap(publishRejection, promise);
-}
-
-function subscribe(parent, child, onFulfillment, onRejection) {
-  var _subscribers = parent._subscribers;
-  var length = _subscribers.length;
-
-  parent._onerror = null;
-
-  _subscribers[length] = child;
-  _subscribers[length + FULFILLED] = onFulfillment;
-  _subscribers[length + REJECTED] = onRejection;
-
-  if (length === 0 && parent._state) {
-    asap(publish, parent);
-  }
-}
-
-function publish(promise) {
-  var subscribers = promise._subscribers;
-  var settled = promise._state;
-
-  if (subscribers.length === 0) {
-    return;
-  }
-
-  var child = undefined,
-      callback = undefined,
-      detail = promise._result;
-
-  for (var i = 0; i < subscribers.length; i += 3) {
-    child = subscribers[i];
-    callback = subscribers[i + settled];
-
-    if (child) {
-      invokeCallback(settled, child, callback, detail);
-    } else {
-      callback(detail);
-    }
-  }
-
-  promise._subscribers.length = 0;
-}
-
-function ErrorObject() {
-  this.error = null;
-}
-
-var TRY_CATCH_ERROR = new ErrorObject();
-
-function tryCatch(callback, detail) {
-  try {
-    return callback(detail);
-  } catch (e) {
-    TRY_CATCH_ERROR.error = e;
-    return TRY_CATCH_ERROR;
-  }
-}
-
-function invokeCallback(settled, promise, callback, detail) {
-  var hasCallback = isFunction(callback),
-      value = undefined,
-      error = undefined,
-      succeeded = undefined,
-      failed = undefined;
-
-  if (hasCallback) {
-    value = tryCatch(callback, detail);
-
-    if (value === TRY_CATCH_ERROR) {
-      failed = true;
-      error = value.error;
-      value.error = null;
-    } else {
-      succeeded = true;
-    }
-
-    if (promise === value) {
-      _reject(promise, cannotReturnOwn());
-      return;
-    }
-  } else {
-    value = detail;
-    succeeded = true;
-  }
-
-  if (promise._state !== PENDING) {
-    // noop
-  } else if (hasCallback && succeeded) {
-      _resolve(promise, value);
-    } else if (failed) {
-      _reject(promise, error);
-    } else if (settled === FULFILLED) {
-      fulfill(promise, value);
-    } else if (settled === REJECTED) {
-      _reject(promise, value);
-    }
-}
-
-function initializePromise(promise, resolver) {
-  try {
-    resolver(function resolvePromise(value) {
-      _resolve(promise, value);
-    }, function rejectPromise(reason) {
-      _reject(promise, reason);
-    });
-  } catch (e) {
-    _reject(promise, e);
-  }
-}
-
-var id = 0;
-function nextId() {
-  return id++;
-}
-
-function makePromise(promise) {
-  promise[PROMISE_ID] = id++;
-  promise._state = undefined;
-  promise._result = undefined;
-  promise._subscribers = [];
-}
-
-function Enumerator(Constructor, input) {
-  this._instanceConstructor = Constructor;
-  this.promise = new Constructor(noop);
-
-  if (!this.promise[PROMISE_ID]) {
-    makePromise(this.promise);
-  }
-
-  if (isArray(input)) {
-    this._input = input;
-    this.length = input.length;
-    this._remaining = input.length;
-
-    this._result = new Array(this.length);
-
-    if (this.length === 0) {
-      fulfill(this.promise, this._result);
-    } else {
-      this.length = this.length || 0;
-      this._enumerate();
-      if (this._remaining === 0) {
-        fulfill(this.promise, this._result);
-      }
-    }
-  } else {
-    _reject(this.promise, validationError());
-  }
-}
-
-function validationError() {
-  return new Error('Array Methods must be provided an Array');
-};
-
-Enumerator.prototype._enumerate = function () {
-  var length = this.length;
-  var _input = this._input;
-
-  for (var i = 0; this._state === PENDING && i < length; i++) {
-    this._eachEntry(_input[i], i);
-  }
-};
-
-Enumerator.prototype._eachEntry = function (entry, i) {
-  var c = this._instanceConstructor;
-  var resolve$$ = c.resolve;
-
-  if (resolve$$ === resolve) {
-    var _then = getThen(entry);
-
-    if (_then === then && entry._state !== PENDING) {
-      this._settledAt(entry._state, i, entry._result);
-    } else if (typeof _then !== 'function') {
-      this._remaining--;
-      this._result[i] = entry;
-    } else if (c === Promise) {
-      var promise = new c(noop);
-      handleMaybeThenable(promise, entry, _then);
-      this._willSettleAt(promise, i);
-    } else {
-      this._willSettleAt(new c(function (resolve$$) {
-        return resolve$$(entry);
-      }), i);
-    }
-  } else {
-    this._willSettleAt(resolve$$(entry), i);
-  }
-};
-
-Enumerator.prototype._settledAt = function (state, i, value) {
-  var promise = this.promise;
-
-  if (promise._state === PENDING) {
-    this._remaining--;
-
-    if (state === REJECTED) {
-      _reject(promise, value);
-    } else {
-      this._result[i] = value;
-    }
-  }
-
-  if (this._remaining === 0) {
-    fulfill(promise, this._result);
-  }
-};
-
-Enumerator.prototype._willSettleAt = function (promise, i) {
-  var enumerator = this;
-
-  subscribe(promise, undefined, function (value) {
-    return enumerator._settledAt(FULFILLED, i, value);
-  }, function (reason) {
-    return enumerator._settledAt(REJECTED, i, reason);
-  });
-};
-
-/**
-  `Promise.all` accepts an array of promises, and returns a new promise which
-  is fulfilled with an array of fulfillment values for the passed promises, or
-  rejected with the reason of the first passed promise to be rejected. It casts all
-  elements of the passed iterable to promises as it runs this algorithm.
-
-  Example:
-
-  ```javascript
-  let promise1 = resolve(1);
-  let promise2 = resolve(2);
-  let promise3 = resolve(3);
-  let promises = [ promise1, promise2, promise3 ];
-
-  Promise.all(promises).then(function(array){
-    // The array here would be [ 1, 2, 3 ];
-  });
-  ```
-
-  If any of the `promises` given to `all` are rejected, the first promise
-  that is rejected will be given as an argument to the returned promises's
-  rejection handler. For example:
-
-  Example:
-
-  ```javascript
-  let promise1 = resolve(1);
-  let promise2 = reject(new Error("2"));
-  let promise3 = reject(new Error("3"));
-  let promises = [ promise1, promise2, promise3 ];
-
-  Promise.all(promises).then(function(array){
-    // Code here never runs because there are rejected promises!
-  }, function(error) {
-    // error.message === "2"
-  });
-  ```
-
-  @method all
-  @static
-  @param {Array} entries array of promises
-  @param {String} label optional string for labeling the promise.
-  Useful for tooling.
-  @return {Promise} promise that is fulfilled when all `promises` have been
-  fulfilled, or rejected if any of them become rejected.
-  @static
-*/
-function all(entries) {
-  return new Enumerator(this, entries).promise;
-}
-
-/**
-  `Promise.race` returns a new promise which is settled in the same way as the
-  first passed promise to settle.
-
-  Example:
-
-  ```javascript
-  let promise1 = new Promise(function(resolve, reject){
-    setTimeout(function(){
-      resolve('promise 1');
-    }, 200);
-  });
-
-  let promise2 = new Promise(function(resolve, reject){
-    setTimeout(function(){
-      resolve('promise 2');
-    }, 100);
-  });
-
-  Promise.race([promise1, promise2]).then(function(result){
-    // result === 'promise 2' because it was resolved before promise1
-    // was resolved.
-  });
-  ```
-
-  `Promise.race` is deterministic in that only the state of the first
-  settled promise matters. For example, even if other promises given to the
-  `promises` array argument are resolved, but the first settled promise has
-  become rejected before the other promises became fulfilled, the returned
-  promise will become rejected:
-
-  ```javascript
-  let promise1 = new Promise(function(resolve, reject){
-    setTimeout(function(){
-      resolve('promise 1');
-    }, 200);
-  });
-
-  let promise2 = new Promise(function(resolve, reject){
-    setTimeout(function(){
-      reject(new Error('promise 2'));
-    }, 100);
-  });
-
-  Promise.race([promise1, promise2]).then(function(result){
-    // Code here never runs
-  }, function(reason){
-    // reason.message === 'promise 2' because promise 2 became rejected before
-    // promise 1 became fulfilled
-  });
-  ```
-
-  An example real-world use case is implementing timeouts:
-
-  ```javascript
-  Promise.race([ajax('foo.json'), timeout(5000)])
-  ```
-
-  @method race
-  @static
-  @param {Array} promises array of promises to observe
-  Useful for tooling.
-  @return {Promise} a promise which settles in the same way as the first passed
-  promise to settle.
-*/
-function race(entries) {
-  /*jshint validthis:true */
-  var Constructor = this;
-
-  if (!isArray(entries)) {
-    return new Constructor(function (_, reject) {
-      return reject(new TypeError('You must pass an array to race.'));
-    });
-  } else {
-    return new Constructor(function (resolve, reject) {
-      var length = entries.length;
-      for (var i = 0; i < length; i++) {
-        Constructor.resolve(entries[i]).then(resolve, reject);
-      }
-    });
-  }
-}
-
-/**
-  `Promise.reject` returns a promise rejected with the passed `reason`.
-  It is shorthand for the following:
-
-  ```javascript
-  let promise = new Promise(function(resolve, reject){
-    reject(new Error('WHOOPS'));
-  });
-
-  promise.then(function(value){
-    // Code here doesn't run because the promise is rejected!
-  }, function(reason){
-    // reason.message === 'WHOOPS'
-  });
-  ```
-
-  Instead of writing the above, your code now simply becomes the following:
-
-  ```javascript
-  let promise = Promise.reject(new Error('WHOOPS'));
-
-  promise.then(function(value){
-    // Code here doesn't run because the promise is rejected!
-  }, function(reason){
-    // reason.message === 'WHOOPS'
-  });
-  ```
-
-  @method reject
-  @static
-  @param {Any} reason value that the returned promise will be rejected with.
-  Useful for tooling.
-  @return {Promise} a promise rejected with the given `reason`.
-*/
-function reject(reason) {
-  /*jshint validthis:true */
-  var Constructor = this;
-  var promise = new Constructor(noop);
-  _reject(promise, reason);
-  return promise;
-}
-
-function needsResolver() {
-  throw new TypeError('You must pass a resolver function as the first argument to the promise constructor');
-}
-
-function needsNew() {
-  throw new TypeError("Failed to construct 'Promise': Please use the 'new' operator, this object constructor cannot be called as a function.");
-}
-
-/**
-  Promise objects represent the eventual result of an asynchronous operation. The
-  primary way of interacting with a promise is through its `then` method, which
-  registers callbacks to receive either a promise's eventual value or the reason
-  why the promise cannot be fulfilled.
-
-  Terminology
-  -----------
-
-  - `promise` is an object or function with a `then` method whose behavior conforms to this specification.
-  - `thenable` is an object or function that defines a `then` method.
-  - `value` is any legal JavaScript value (including undefined, a thenable, or a promise).
-  - `exception` is a value that is thrown using the throw statement.
-  - `reason` is a value that indicates why a promise was rejected.
-  - `settled` the final resting state of a promise, fulfilled or rejected.
-
-  A promise can be in one of three states: pending, fulfilled, or rejected.
-
-  Promises that are fulfilled have a fulfillment value and are in the fulfilled
-  state.  Promises that are rejected have a rejection reason and are in the
-  rejected state.  A fulfillment value is never a thenable.
-
-  Promises can also be said to *resolve* a value.  If this value is also a
-  promise, then the original promise's settled state will match the value's
-  settled state.  So a promise that *resolves* a promise that rejects will
-  itself reject, and a promise that *resolves* a promise that fulfills will
-  itself fulfill.
-
-
-  Basic Usage:
-  ------------
-
-  ```js
-  let promise = new Promise(function(resolve, reject) {
-    // on success
-    resolve(value);
-
-    // on failure
-    reject(reason);
-  });
-
-  promise.then(function(value) {
-    // on fulfillment
-  }, function(reason) {
-    // on rejection
-  });
-  ```
-
-  Advanced Usage:
-  ---------------
-
-  Promises shine when abstracting away asynchronous interactions such as
-  `XMLHttpRequest`s.
-
-  ```js
-  function getJSON(url) {
-    return new Promise(function(resolve, reject){
-      let xhr = new XMLHttpRequest();
-
-      xhr.open('GET', url);
-      xhr.onreadystatechange = handler;
-      xhr.responseType = 'json';
-      xhr.setRequestHeader('Accept', 'application/json');
-      xhr.send();
-
-      function handler() {
-        if (this.readyState === this.DONE) {
-          if (this.status === 200) {
-            resolve(this.response);
-          } else {
-            reject(new Error('getJSON: `' + url + '` failed with status: [' + this.status + ']'));
-          }
-        }
-      };
-    });
-  }
-
-  getJSON('/posts.json').then(function(json) {
-    // on fulfillment
-  }, function(reason) {
-    // on rejection
-  });
-  ```
-
-  Unlike callbacks, promises are great composable primitives.
-
-  ```js
-  Promise.all([
-    getJSON('/posts'),
-    getJSON('/comments')
-  ]).then(function(values){
-    values[0] // => postsJSON
-    values[1] // => commentsJSON
-
-    return values;
-  });
-  ```
-
-  @class Promise
-  @param {function} resolver
-  Useful for tooling.
-  @constructor
-*/
-function Promise(resolver) {
-  this[PROMISE_ID] = nextId();
-  this._result = this._state = undefined;
-  this._subscribers = [];
-
-  if (noop !== resolver) {
-    typeof resolver !== 'function' && needsResolver();
-    this instanceof Promise ? initializePromise(this, resolver) : needsNew();
-  }
-}
-
-Promise.all = all;
-Promise.race = race;
-Promise.resolve = resolve;
-Promise.reject = reject;
-Promise._setScheduler = setScheduler;
-Promise._setAsap = setAsap;
-Promise._asap = asap;
-
-Promise.prototype = {
-  constructor: Promise,
-
-  /**
-    The primary way of interacting with a promise is through its `then` method,
-    which registers callbacks to receive either a promise's eventual value or the
-    reason why the promise cannot be fulfilled.
-  
-    ```js
-    findUser().then(function(user){
-      // user is available
-    }, function(reason){
-      // user is unavailable, and you are given the reason why
-    });
-    ```
-  
-    Chaining
-    --------
-  
-    The return value of `then` is itself a promise.  This second, 'downstream'
-    promise is resolved with the return value of the first promise's fulfillment
-    or rejection handler, or rejected if the handler throws an exception.
-  
-    ```js
-    findUser().then(function (user) {
-      return user.name;
-    }, function (reason) {
-      return 'default name';
-    }).then(function (userName) {
-      // If `findUser` fulfilled, `userName` will be the user's name, otherwise it
-      // will be `'default name'`
-    });
-  
-    findUser().then(function (user) {
-      throw new Error('Found user, but still unhappy');
-    }, function (reason) {
-      throw new Error('`findUser` rejected and we're unhappy');
-    }).then(function (value) {
-      // never reached
-    }, function (reason) {
-      // if `findUser` fulfilled, `reason` will be 'Found user, but still unhappy'.
-      // If `findUser` rejected, `reason` will be '`findUser` rejected and we're unhappy'.
-    });
-    ```
-    If the downstream promise does not specify a rejection handler, rejection reasons will be propagated further downstream.
-  
-    ```js
-    findUser().then(function (user) {
-      throw new PedagogicalException('Upstream error');
-    }).then(function (value) {
-      // never reached
-    }).then(function (value) {
-      // never reached
-    }, function (reason) {
-      // The `PedgagocialException` is propagated all the way down to here
-    });
-    ```
-  
-    Assimilation
-    ------------
-  
-    Sometimes the value you want to propagate to a downstream promise can only be
-    retrieved asynchronously. This can be achieved by returning a promise in the
-    fulfillment or rejection handler. The downstream promise will then be pending
-    until the returned promise is settled. This is called *assimilation*.
-  
-    ```js
-    findUser().then(function (user) {
-      return findCommentsByAuthor(user);
-    }).then(function (comments) {
-      // The user's comments are now available
-    });
-    ```
-  
-    If the assimliated promise rejects, then the downstream promise will also reject.
-  
-    ```js
-    findUser().then(function (user) {
-      return findCommentsByAuthor(user);
-    }).then(function (comments) {
-      // If `findCommentsByAuthor` fulfills, we'll have the value here
-    }, function (reason) {
-      // If `findCommentsByAuthor` rejects, we'll have the reason here
-    });
-    ```
-  
-    Simple Example
-    --------------
-  
-    Synchronous Example
-  
-    ```javascript
-    let result;
-  
-    try {
-      result = findResult();
-      // success
-    } catch(reason) {
-      // failure
-    }
-    ```
-  
-    Errback Example
-  
-    ```js
-    findResult(function(result, err){
-      if (err) {
-        // failure
-      } else {
-        // success
-      }
-    });
-    ```
-  
-    Promise Example;
-  
-    ```javascript
-    findResult().then(function(result){
-      // success
-    }, function(reason){
-      // failure
-    });
-    ```
-  
-    Advanced Example
-    --------------
-  
-    Synchronous Example
-  
-    ```javascript
-    let author, books;
-  
-    try {
-      author = findAuthor();
-      books  = findBooksByAuthor(author);
-      // success
-    } catch(reason) {
-      // failure
-    }
-    ```
-  
-    Errback Example
-  
-    ```js
-  
-    function foundBooks(books) {
-  
-    }
-  
-    function failure(reason) {
-  
-    }
-  
-    findAuthor(function(author, err){
-      if (err) {
-        failure(err);
-        // failure
-      } else {
-        try {
-          findBoooksByAuthor(author, function(books, err) {
-            if (err) {
-              failure(err);
-            } else {
-              try {
-                foundBooks(books);
-              } catch(reason) {
-                failure(reason);
-              }
-            }
-          });
-        } catch(error) {
-          failure(err);
-        }
-        // success
-      }
-    });
-    ```
-  
-    Promise Example;
-  
-    ```javascript
-    findAuthor().
-      then(findBooksByAuthor).
-      then(function(books){
-        // found books
-    }).catch(function(reason){
-      // something went wrong
-    });
-    ```
-  
-    @method then
-    @param {Function} onFulfilled
-    @param {Function} onRejected
-    Useful for tooling.
-    @return {Promise}
-  */
-  then: then,
-
-  /**
-    `catch` is simply sugar for `then(undefined, onRejection)` which makes it the same
-    as the catch block of a try/catch statement.
-  
-    ```js
-    function findAuthor(){
-      throw new Error('couldn't find that author');
-    }
-  
-    // synchronous
-    try {
-      findAuthor();
-    } catch(reason) {
-      // something went wrong
-    }
-  
-    // async with promises
-    findAuthor().catch(function(reason){
-      // something went wrong
-    });
-    ```
-  
-    @method catch
-    @param {Function} onRejection
-    Useful for tooling.
-    @return {Promise}
-  */
-  'catch': function _catch(onRejection) {
-    return this.then(null, onRejection);
-  }
-};
-
-function polyfill() {
-    var local = undefined;
-
-    if (typeof global !== 'undefined') {
-        local = global;
-    } else if (typeof self !== 'undefined') {
-        local = self;
-    } else {
-        try {
-            local = Function('return this')();
-        } catch (e) {
-            throw new Error('polyfill failed because global object is unavailable in this environment');
-        }
-    }
-
-    var P = local.Promise;
-
-    if (P) {
-        var promiseToString = null;
-        try {
-            promiseToString = Object.prototype.toString.call(P.resolve());
-        } catch (e) {
-            // silently ignored
-        }
-
-        if (promiseToString === '[object Promise]' && !P.cast) {
-            return;
-        }
-    }
-
-    local.Promise = Promise;
-}
-
-// Strange compat..
-Promise.polyfill = polyfill;
-Promise.Promise = Promise;
-
-return Promise;
-
-})));
-
-
-}).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"_process":88}],28:[function(require,module,exports){
 'use strict';
 
 var matchOperatorsRe = /[|\\{}()[\]^$+*?.]/g;
@@ -4787,7 +3618,7 @@ module.exports = function (str) {
 	return str.replace(matchOperatorsRe, '\\$&');
 };
 
-},{}],29:[function(require,module,exports){
+},{}],27:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -5091,7 +3922,7 @@ function isUndefined(arg) {
   return arg === void 0;
 }
 
-},{}],30:[function(require,module,exports){
+},{}],28:[function(require,module,exports){
 (function (Buffer){
 (function (global, module) {
 
@@ -6379,7 +5210,7 @@ function isUndefined(arg) {
 );
 
 }).call(this,require("buffer").Buffer)
-},{"buffer":8}],31:[function(require,module,exports){
+},{"buffer":8}],29:[function(require,module,exports){
 (function (process){
 // Growl - Copyright TJ Holowaychuk <tj@vision-media.ca> (MIT Licensed)
 
@@ -6673,7 +5504,7 @@ function growl(msg, options, fn) {
 };
 
 }).call(this,require('_process'))
-},{"_process":88,"child_process":7,"fs":7,"os":85,"path":86}],32:[function(require,module,exports){
+},{"_process":86,"child_process":7,"fs":7,"os":83,"path":84}],30:[function(require,module,exports){
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   var e, m
   var eLen = nBytes * 8 - mLen - 1
@@ -6759,7 +5590,7 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
   buffer[offset + i - d] |= s * 128
 }
 
-},{}],33:[function(require,module,exports){
+},{}],31:[function(require,module,exports){
 if (typeof Object.create === 'function') {
   // implementation from standard node.js 'util' module
   module.exports = function inherits(ctor, superCtor) {
@@ -6784,7 +5615,7 @@ if (typeof Object.create === 'function') {
   }
 }
 
-},{}],34:[function(require,module,exports){
+},{}],32:[function(require,module,exports){
 /*!
  * Determine if an object is a Buffer
  *
@@ -6807,14 +5638,14 @@ function isSlowBuffer (obj) {
   return typeof obj.readFloatLE === 'function' && typeof obj.slice === 'function' && isBuffer(obj.slice(0, 0))
 }
 
-},{}],35:[function(require,module,exports){
+},{}],33:[function(require,module,exports){
 var toString = {}.toString;
 
 module.exports = Array.isArray || function (arr) {
   return toString.call(arr) == '[object Array]';
 };
 
-},{}],36:[function(require,module,exports){
+},{}],34:[function(require,module,exports){
 (function (global){
 /*! JSON v3.3.2 | http://bestiejs.github.io/json3 | Copyright 2012-2014, Kit Cambridge | http://kit.mit-license.org */
 ;(function () {
@@ -7720,7 +6551,7 @@ module.exports = Array.isArray || function (arr) {
 }).call(this);
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],37:[function(require,module,exports){
+},{}],35:[function(require,module,exports){
 /**
  * lodash 3.2.0 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -7749,7 +6580,7 @@ function baseAssign(object, source) {
 
 module.exports = baseAssign;
 
-},{"lodash._basecopy":38,"lodash.keys":45}],38:[function(require,module,exports){
+},{"lodash._basecopy":36,"lodash.keys":43}],36:[function(require,module,exports){
 /**
  * lodash 3.0.1 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -7783,7 +6614,7 @@ function baseCopy(source, props, object) {
 
 module.exports = baseCopy;
 
-},{}],39:[function(require,module,exports){
+},{}],37:[function(require,module,exports){
 /**
  * lodash 3.0.3 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -7842,7 +6673,7 @@ function isObject(value) {
 
 module.exports = baseCreate;
 
-},{}],40:[function(require,module,exports){
+},{}],38:[function(require,module,exports){
 /**
  * lodash 3.9.1 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -7981,7 +6812,7 @@ function isNative(value) {
 
 module.exports = getNative;
 
-},{}],41:[function(require,module,exports){
+},{}],39:[function(require,module,exports){
 /**
  * lodash 3.0.9 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -8115,7 +6946,7 @@ function isObject(value) {
 
 module.exports = isIterateeCall;
 
-},{}],42:[function(require,module,exports){
+},{}],40:[function(require,module,exports){
 /**
  * lodash 3.1.1 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -8172,7 +7003,7 @@ function create(prototype, properties, guard) {
 
 module.exports = create;
 
-},{"lodash._baseassign":37,"lodash._basecreate":39,"lodash._isiterateecall":41}],43:[function(require,module,exports){
+},{"lodash._baseassign":35,"lodash._basecreate":37,"lodash._isiterateecall":39}],41:[function(require,module,exports){
 /**
  * lodash (Custom Build) <https://lodash.com/>
  * Build: `lodash modularize exports="npm" -o ./`
@@ -8403,7 +7234,7 @@ function isObjectLike(value) {
 
 module.exports = isArguments;
 
-},{}],44:[function(require,module,exports){
+},{}],42:[function(require,module,exports){
 /**
  * lodash 3.0.4 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -8585,7 +7416,7 @@ function isNative(value) {
 
 module.exports = isArray;
 
-},{}],45:[function(require,module,exports){
+},{}],43:[function(require,module,exports){
 /**
  * lodash 3.1.2 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -8823,7 +7654,7 @@ function keysIn(object) {
 
 module.exports = keys;
 
-},{"lodash._getnative":40,"lodash.isarguments":43,"lodash.isarray":44}],46:[function(require,module,exports){
+},{"lodash._getnative":38,"lodash.isarguments":41,"lodash.isarray":42}],44:[function(require,module,exports){
 (function (process){
 var path = require('path');
 var fs = require('fs');
@@ -8925,7 +7756,7 @@ mkdirP.sync = function sync (p, opts, made) {
 };
 
 }).call(this,require('_process'))
-},{"_process":88,"fs":7,"path":86}],47:[function(require,module,exports){
+},{"_process":86,"fs":7,"path":84}],45:[function(require,module,exports){
 (function (process,global){
 'use strict';
 
@@ -9116,7 +7947,7 @@ global.mocha = mocha;
 module.exports = global;
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./lib/mocha":60,"_process":88,"browser-stdout":6}],48:[function(require,module,exports){
+},{"./lib/mocha":58,"_process":86,"browser-stdout":6}],46:[function(require,module,exports){
 'use strict';
 
 function noop () {}
@@ -9125,7 +7956,7 @@ module.exports = function () {
   return noop;
 };
 
-},{}],49:[function(require,module,exports){
+},{}],47:[function(require,module,exports){
 'use strict';
 
 /**
@@ -9322,7 +8153,7 @@ EventEmitter.prototype.emit = function (name) {
   return true;
 };
 
-},{}],50:[function(require,module,exports){
+},{}],48:[function(require,module,exports){
 'use strict';
 
 /**
@@ -9443,7 +8274,7 @@ Progress.prototype.draw = function (ctx) {
   return this;
 };
 
-},{}],51:[function(require,module,exports){
+},{}],49:[function(require,module,exports){
 (function (global){
 'use strict';
 
@@ -9460,7 +8291,7 @@ exports.getWindowSize = function getWindowSize () {
 };
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],52:[function(require,module,exports){
+},{}],50:[function(require,module,exports){
 'use strict';
 
 /**
@@ -9574,7 +8405,7 @@ Context.prototype.inspect = function () {
   }, 2);
 };
 
-},{"json3":36}],53:[function(require,module,exports){
+},{"json3":34}],51:[function(require,module,exports){
 'use strict';
 
 /**
@@ -9624,7 +8455,7 @@ Hook.prototype.error = function (err) {
   this._error = err;
 };
 
-},{"./runnable":79,"./utils":84}],54:[function(require,module,exports){
+},{"./runnable":77,"./utils":82}],52:[function(require,module,exports){
 'use strict';
 
 /**
@@ -9741,7 +8572,7 @@ module.exports = function (suite) {
   });
 };
 
-},{"../test":82,"./common":55}],55:[function(require,module,exports){
+},{"../test":80,"./common":53}],53:[function(require,module,exports){
 'use strict';
 
 var Suite = require('../suite');
@@ -9901,7 +8732,7 @@ module.exports = function (suites, context, mocha) {
   };
 };
 
-},{"../suite":81}],56:[function(require,module,exports){
+},{"../suite":79}],54:[function(require,module,exports){
 'use strict';
 
 /**
@@ -9966,7 +8797,7 @@ module.exports = function (suite) {
   }
 };
 
-},{"../suite":81,"../test":82}],57:[function(require,module,exports){
+},{"../suite":79,"../test":80}],55:[function(require,module,exports){
 'use strict';
 
 exports.bdd = require('./bdd');
@@ -9974,7 +8805,7 @@ exports.tdd = require('./tdd');
 exports.qunit = require('./qunit');
 exports.exports = require('./exports');
 
-},{"./bdd":54,"./exports":56,"./qunit":58,"./tdd":59}],58:[function(require,module,exports){
+},{"./bdd":52,"./exports":54,"./qunit":56,"./tdd":57}],56:[function(require,module,exports){
 'use strict';
 
 /**
@@ -10075,7 +8906,7 @@ module.exports = function (suite) {
   });
 };
 
-},{"../test":82,"./common":55}],59:[function(require,module,exports){
+},{"../test":80,"./common":53}],57:[function(require,module,exports){
 'use strict';
 
 /**
@@ -10183,7 +9014,7 @@ module.exports = function (suite) {
   });
 };
 
-},{"../test":82,"./common":55}],60:[function(require,module,exports){
+},{"../test":80,"./common":53}],58:[function(require,module,exports){
 (function (process,global,__dirname){
 'use strict';
 
@@ -10717,7 +9548,7 @@ Mocha.prototype.run = function (fn) {
 };
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {},"/node_modules\\mocha\\lib")
-},{"./context":52,"./hook":53,"./interfaces":57,"./reporters":67,"./runnable":79,"./runner":80,"./suite":81,"./test":82,"./utils":84,"_process":88,"escape-string-regexp":28,"growl":31,"path":5}],61:[function(require,module,exports){
+},{"./context":50,"./hook":51,"./interfaces":55,"./reporters":65,"./runnable":77,"./runner":78,"./suite":79,"./test":80,"./utils":82,"_process":86,"escape-string-regexp":26,"growl":29,"path":5}],59:[function(require,module,exports){
 'use strict';
 
 /**
@@ -10849,7 +9680,7 @@ function plural (ms, n, name) {
   return Math.ceil(ms / n) + ' ' + name + 's';
 }
 
-},{}],62:[function(require,module,exports){
+},{}],60:[function(require,module,exports){
 'use strict';
 
 /**
@@ -10867,7 +9698,7 @@ function Pending (message) {
   this.message = message;
 }
 
-},{}],63:[function(require,module,exports){
+},{}],61:[function(require,module,exports){
 (function (process,global){
 'use strict';
 
@@ -11362,7 +10193,7 @@ function sameType (a, b) {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"../ms":61,"../utils":84,"_process":88,"diff":20,"supports-color":5,"tty":51}],64:[function(require,module,exports){
+},{"../ms":59,"../utils":82,"_process":86,"diff":20,"supports-color":5,"tty":49}],62:[function(require,module,exports){
 'use strict';
 
 /**
@@ -11428,7 +10259,7 @@ function Doc (runner) {
   });
 }
 
-},{"../utils":84,"./base":63}],65:[function(require,module,exports){
+},{"../utils":82,"./base":61}],63:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -11500,7 +10331,7 @@ function Dot (runner) {
 inherits(Dot, Base);
 
 }).call(this,require('_process'))
-},{"../utils":84,"./base":63,"_process":88}],66:[function(require,module,exports){
+},{"../utils":82,"./base":61,"_process":86}],64:[function(require,module,exports){
 (function (global){
 'use strict';
 
@@ -11852,7 +10683,7 @@ function on (el, event, fn) {
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"../browser/progress":50,"../utils":84,"./base":63,"escape-string-regexp":28}],67:[function(require,module,exports){
+},{"../browser/progress":48,"../utils":82,"./base":61,"escape-string-regexp":26}],65:[function(require,module,exports){
 'use strict';
 
 // Alias exports to a their normalized format Mocha#reporter to prevent a need
@@ -11873,7 +10704,7 @@ exports.Progress = exports.progress = require('./progress');
 exports.Landing = exports.landing = require('./landing');
 exports.JSONStream = exports['json-stream'] = require('./json-stream');
 
-},{"./base":63,"./doc":64,"./dot":65,"./html":66,"./json":69,"./json-stream":68,"./landing":70,"./list":71,"./markdown":72,"./min":73,"./nyan":74,"./progress":75,"./spec":76,"./tap":77,"./xunit":78}],68:[function(require,module,exports){
+},{"./base":61,"./doc":62,"./dot":63,"./html":64,"./json":67,"./json-stream":66,"./landing":68,"./list":69,"./markdown":70,"./min":71,"./nyan":72,"./progress":73,"./spec":74,"./tap":75,"./xunit":76}],66:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -11940,7 +10771,7 @@ function clean (test) {
 }
 
 }).call(this,require('_process'))
-},{"./base":63,"_process":88,"json3":36}],69:[function(require,module,exports){
+},{"./base":61,"_process":86,"json3":34}],67:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -12036,7 +10867,7 @@ function errorJSON (err) {
 }
 
 }).call(this,require('_process'))
-},{"./base":63,"_process":88}],70:[function(require,module,exports){
+},{"./base":61,"_process":86}],68:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -12134,7 +10965,7 @@ function Landing (runner) {
 inherits(Landing, Base);
 
 }).call(this,require('_process'))
-},{"../utils":84,"./base":63,"_process":88}],71:[function(require,module,exports){
+},{"../utils":82,"./base":61,"_process":86}],69:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -12201,7 +11032,7 @@ function List (runner) {
 inherits(List, Base);
 
 }).call(this,require('_process'))
-},{"../utils":84,"./base":63,"_process":88}],72:[function(require,module,exports){
+},{"../utils":82,"./base":61,"_process":86}],70:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -12304,7 +11135,7 @@ function Markdown (runner) {
 }
 
 }).call(this,require('_process'))
-},{"../utils":84,"./base":63,"_process":88}],73:[function(require,module,exports){
+},{"../utils":82,"./base":61,"_process":86}],71:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -12346,7 +11177,7 @@ function Min (runner) {
 inherits(Min, Base);
 
 }).call(this,require('_process'))
-},{"../utils":84,"./base":63,"_process":88}],74:[function(require,module,exports){
+},{"../utils":82,"./base":61,"_process":86}],72:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -12613,7 +11444,7 @@ function write (string) {
 }
 
 }).call(this,require('_process'))
-},{"../utils":84,"./base":63,"_process":88}],75:[function(require,module,exports){
+},{"../utils":82,"./base":61,"_process":86}],73:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -12708,7 +11539,7 @@ function Progress (runner, options) {
 inherits(Progress, Base);
 
 }).call(this,require('_process'))
-},{"../utils":84,"./base":63,"_process":88}],76:[function(require,module,exports){
+},{"../utils":82,"./base":61,"_process":86}],74:[function(require,module,exports){
 'use strict';
 
 /**
@@ -12791,7 +11622,7 @@ function Spec (runner) {
  */
 inherits(Spec, Base);
 
-},{"../utils":84,"./base":63}],77:[function(require,module,exports){
+},{"../utils":82,"./base":61}],75:[function(require,module,exports){
 'use strict';
 
 /**
@@ -12863,7 +11694,7 @@ function title (test) {
   return test.fullTitle().replace(/#/g, '');
 }
 
-},{"./base":63}],78:[function(require,module,exports){
+},{"./base":61}],76:[function(require,module,exports){
 (function (process,global){
 'use strict';
 
@@ -13035,7 +11866,7 @@ function tag (name, attrs, close, content) {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"../utils":84,"./base":63,"_process":88,"fs":5,"mkdirp":46,"path":5}],79:[function(require,module,exports){
+},{"../utils":82,"./base":61,"_process":86,"fs":5,"mkdirp":44,"path":5}],77:[function(require,module,exports){
 (function (global){
 'use strict';
 
@@ -13428,7 +12259,7 @@ Runnable.prototype.run = function (fn) {
 };
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./ms":61,"./pending":62,"./utils":84,"debug":48,"events":49,"json3":36,"lodash.create":42}],80:[function(require,module,exports){
+},{"./ms":59,"./pending":60,"./utils":82,"debug":46,"events":47,"json3":34,"lodash.create":40}],78:[function(require,module,exports){
 (function (process,global){
 'use strict';
 
@@ -14394,7 +13225,7 @@ function extraGlobals () {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./pending":62,"./runnable":79,"./utils":84,"_process":88,"debug":48,"events":49}],81:[function(require,module,exports){
+},{"./pending":60,"./runnable":77,"./utils":82,"_process":86,"debug":46,"events":47}],79:[function(require,module,exports){
 'use strict';
 
 /**
@@ -14798,7 +13629,7 @@ Suite.prototype.run = function run () {
   }
 };
 
-},{"./hook":53,"./ms":61,"./utils":84,"debug":48,"events":49}],82:[function(require,module,exports){
+},{"./hook":51,"./ms":59,"./utils":82,"debug":46,"events":47}],80:[function(require,module,exports){
 'use strict';
 
 /**
@@ -14852,7 +13683,7 @@ Test.prototype.clone = function () {
   return test;
 };
 
-},{"./runnable":79,"./utils":84,"lodash.create":42}],83:[function(require,module,exports){
+},{"./runnable":77,"./utils":82,"lodash.create":40}],81:[function(require,module,exports){
 'use strict';
 
 /**
@@ -14891,7 +13722,7 @@ function toISOString(date) {
 
 module.exports = toISOString;
 
-},{}],84:[function(require,module,exports){
+},{}],82:[function(require,module,exports){
 (function (process,Buffer){
 'use strict';
 
@@ -15702,7 +14533,7 @@ exports.isPromise = function isPromise (value) {
 exports.noop = function () {};
 
 }).call(this,require('_process'),require("buffer").Buffer)
-},{"./to-iso-string":83,"_process":88,"buffer":8,"debug":48,"fs":5,"glob":5,"json3":36,"path":5,"util":107}],85:[function(require,module,exports){
+},{"./to-iso-string":81,"_process":86,"buffer":8,"debug":46,"fs":5,"glob":5,"json3":34,"path":5,"util":105}],83:[function(require,module,exports){
 exports.endianness = function () { return 'LE' };
 
 exports.hostname = function () {
@@ -15749,7 +14580,7 @@ exports.tmpdir = exports.tmpDir = function () {
 
 exports.EOL = '\n';
 
-},{}],86:[function(require,module,exports){
+},{}],84:[function(require,module,exports){
 (function (process){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -15977,7 +14808,7 @@ var substr = 'ab'.substr(-1) === 'b'
 ;
 
 }).call(this,require('_process'))
-},{"_process":88}],87:[function(require,module,exports){
+},{"_process":86}],85:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -16024,7 +14855,7 @@ function nextTick(fn, arg1, arg2, arg3) {
 }
 
 }).call(this,require('_process'))
-},{"_process":88}],88:[function(require,module,exports){
+},{"_process":86}],86:[function(require,module,exports){
 // shim for using process in browser
 var process = module.exports = {};
 
@@ -16210,10 +15041,10 @@ process.chdir = function (dir) {
 };
 process.umask = function() { return 0; };
 
-},{}],89:[function(require,module,exports){
+},{}],87:[function(require,module,exports){
 module.exports = require('./lib/_stream_duplex.js');
 
-},{"./lib/_stream_duplex.js":90}],90:[function(require,module,exports){
+},{"./lib/_stream_duplex.js":88}],88:[function(require,module,exports){
 // a duplex stream is just a stream that is both readable and writable.
 // Since JS doesn't have multiple prototypal inheritance, this class
 // prototypally inherits from Readable, and then parasitically from
@@ -16289,7 +15120,7 @@ function forEach(xs, f) {
     f(xs[i], i);
   }
 }
-},{"./_stream_readable":92,"./_stream_writable":94,"core-util-is":9,"inherits":33,"process-nextick-args":87}],91:[function(require,module,exports){
+},{"./_stream_readable":90,"./_stream_writable":92,"core-util-is":9,"inherits":31,"process-nextick-args":85}],89:[function(require,module,exports){
 // a passthrough stream.
 // basically just the most minimal sort of Transform stream.
 // Every written chunk gets output as-is.
@@ -16316,7 +15147,7 @@ function PassThrough(options) {
 PassThrough.prototype._transform = function (chunk, encoding, cb) {
   cb(null, chunk);
 };
-},{"./_stream_transform":93,"core-util-is":9,"inherits":33}],92:[function(require,module,exports){
+},{"./_stream_transform":91,"core-util-is":9,"inherits":31}],90:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -17253,7 +16084,7 @@ function indexOf(xs, x) {
   return -1;
 }
 }).call(this,require('_process'))
-},{"./_stream_duplex":90,"./internal/streams/BufferList":95,"./internal/streams/stream":96,"_process":88,"core-util-is":9,"events":29,"inherits":33,"isarray":35,"process-nextick-args":87,"safe-buffer":101,"string_decoder/":103,"util":5}],93:[function(require,module,exports){
+},{"./_stream_duplex":88,"./internal/streams/BufferList":93,"./internal/streams/stream":94,"_process":86,"core-util-is":9,"events":27,"inherits":31,"isarray":33,"process-nextick-args":85,"safe-buffer":99,"string_decoder/":101,"util":5}],91:[function(require,module,exports){
 // a transform stream is a readable/writable stream where you do
 // something with the data.  Sometimes it's called a "filter",
 // but that's not a great name for it, since that implies a thing where
@@ -17436,7 +16267,7 @@ function done(stream, er, data) {
 
   return stream.push(null);
 }
-},{"./_stream_duplex":90,"core-util-is":9,"inherits":33}],94:[function(require,module,exports){
+},{"./_stream_duplex":88,"core-util-is":9,"inherits":31}],92:[function(require,module,exports){
 (function (process){
 // A bit simpler than readable streams.
 // Implement an async ._write(chunk, encoding, cb), and it'll handle all
@@ -17982,7 +16813,7 @@ function CorkedRequest(state) {
   };
 }
 }).call(this,require('_process'))
-},{"./_stream_duplex":90,"./internal/streams/stream":96,"_process":88,"core-util-is":9,"inherits":33,"process-nextick-args":87,"safe-buffer":101,"util-deprecate":104}],95:[function(require,module,exports){
+},{"./_stream_duplex":88,"./internal/streams/stream":94,"_process":86,"core-util-is":9,"inherits":31,"process-nextick-args":85,"safe-buffer":99,"util-deprecate":102}],93:[function(require,module,exports){
 'use strict';
 
 /*<replacement>*/
@@ -18047,13 +16878,13 @@ BufferList.prototype.concat = function (n) {
   }
   return ret;
 };
-},{"safe-buffer":101}],96:[function(require,module,exports){
+},{"safe-buffer":99}],94:[function(require,module,exports){
 module.exports = require('events').EventEmitter;
 
-},{"events":29}],97:[function(require,module,exports){
+},{"events":27}],95:[function(require,module,exports){
 module.exports = require('./readable').PassThrough
 
-},{"./readable":98}],98:[function(require,module,exports){
+},{"./readable":96}],96:[function(require,module,exports){
 exports = module.exports = require('./lib/_stream_readable.js');
 exports.Stream = exports;
 exports.Readable = exports;
@@ -18062,16 +16893,16 @@ exports.Duplex = require('./lib/_stream_duplex.js');
 exports.Transform = require('./lib/_stream_transform.js');
 exports.PassThrough = require('./lib/_stream_passthrough.js');
 
-},{"./lib/_stream_duplex.js":90,"./lib/_stream_passthrough.js":91,"./lib/_stream_readable.js":92,"./lib/_stream_transform.js":93,"./lib/_stream_writable.js":94}],99:[function(require,module,exports){
+},{"./lib/_stream_duplex.js":88,"./lib/_stream_passthrough.js":89,"./lib/_stream_readable.js":90,"./lib/_stream_transform.js":91,"./lib/_stream_writable.js":92}],97:[function(require,module,exports){
 module.exports = require('./readable').Transform
 
-},{"./readable":98}],100:[function(require,module,exports){
+},{"./readable":96}],98:[function(require,module,exports){
 module.exports = require('./lib/_stream_writable.js');
 
-},{"./lib/_stream_writable.js":94}],101:[function(require,module,exports){
+},{"./lib/_stream_writable.js":92}],99:[function(require,module,exports){
 module.exports = require('buffer')
 
-},{"buffer":8}],102:[function(require,module,exports){
+},{"buffer":8}],100:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -18200,7 +17031,7 @@ Stream.prototype.pipe = function(dest, options) {
   return dest;
 };
 
-},{"events":29,"inherits":33,"readable-stream/duplex.js":89,"readable-stream/passthrough.js":97,"readable-stream/readable.js":98,"readable-stream/transform.js":99,"readable-stream/writable.js":100}],103:[function(require,module,exports){
+},{"events":27,"inherits":31,"readable-stream/duplex.js":87,"readable-stream/passthrough.js":95,"readable-stream/readable.js":96,"readable-stream/transform.js":97,"readable-stream/writable.js":98}],101:[function(require,module,exports){
 'use strict';
 
 var Buffer = require('safe-buffer').Buffer;
@@ -18473,7 +17304,7 @@ function simpleWrite(buf) {
 function simpleEnd(buf) {
   return buf && buf.length ? this.write(buf) : '';
 }
-},{"safe-buffer":101}],104:[function(require,module,exports){
+},{"safe-buffer":99}],102:[function(require,module,exports){
 (function (global){
 
 /**
@@ -18544,16 +17375,16 @@ function config (name) {
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],105:[function(require,module,exports){
-arguments[4][33][0].apply(exports,arguments)
-},{"dup":33}],106:[function(require,module,exports){
+},{}],103:[function(require,module,exports){
+arguments[4][31][0].apply(exports,arguments)
+},{"dup":31}],104:[function(require,module,exports){
 module.exports = function isBuffer(arg) {
   return arg && typeof arg === 'object'
     && typeof arg.copy === 'function'
     && typeof arg.fill === 'function'
     && typeof arg.readUInt8 === 'function';
 }
-},{}],107:[function(require,module,exports){
+},{}],105:[function(require,module,exports){
 (function (process,global){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -19143,15 +17974,13 @@ function hasOwnProperty(obj, prop) {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./support/isBuffer":106,"_process":88,"inherits":105}],108:[function(require,module,exports){
+},{"./support/isBuffer":104,"_process":86,"inherits":103}],106:[function(require,module,exports){
 /// <reference path="../node_modules/expect.js/index.js" />
 /// <reference path="../node_modules/mocha/mocha.js" />
 
 'use strict';
 
-var expect = require('expect.js') || window.expect,
-    mocha = require('mocha') || window.mocha,
-    util = require('./util'),
+var util = require('./util'),
 
     defineElement = util.defineElement,
     invalidTagNames = util.invalidTagNames,
@@ -19339,15 +18168,13 @@ describe('CustomElementRegistry.prototype.define()', function () {
     });
 });
 
-},{"./util":114,"expect.js":30,"mocha":47}],109:[function(require,module,exports){
+},{"./util":112}],107:[function(require,module,exports){
 /// <reference path="../node_modules/expect.js/index.js" />
 /// <reference path="../node_modules/mocha/mocha.js" />
 
 'use strict';
 
-var expect = require('expect.js') || window.expect,
-    mocha = require('mocha') || window.mocha,
-    util = require('./util'),
+var util = require('./util'),
 
     shouldThrowTypeError = util.shouldThrowTypeError;
 
@@ -19366,16 +18193,13 @@ describe('CustomElementRegistry.prototype.get()', function () {
     });
 });
 
-},{"./util":114,"expect.js":30,"mocha":47}],110:[function(require,module,exports){
+},{"./util":112}],108:[function(require,module,exports){
 /// <reference path="../node_modules/expect.js/index.js" />
 /// <reference path="../node_modules/mocha/mocha.js" />
 
 'use strict';
 
-var expect = require('expect.js') || window.expect,
-    mocha = require('mocha') || window.mocha,
-    Promise = require('es6-promise/auto') || window.Promise,
-    util = require('./util'),
+var util = require('./util'),
 
     domExCodes = util.domExCodes,
     invalidTagNames = util.invalidTagNames,
@@ -19461,15 +18285,13 @@ describe('CustomElementRegistry.prototype.whenDefined()', function () {
     });
 });
 
-},{"./util":114,"es6-promise/auto":26,"expect.js":30,"mocha":47}],111:[function(require,module,exports){
+},{"./util":112}],109:[function(require,module,exports){
 /// <reference path="../node_modules/expect.js/index.js" />
 /// <reference path="../node_modules/mocha/mocha.js" />
 
 'use strict';
 
-var expect = require('expect.js') || window.expect,
-    mocha = require('mocha') || window.mocha,
-    util = require('./util'),
+var util = require('./util'),
         
     supportsClasses = util.supportsClasses;
 
@@ -19565,14 +18387,11 @@ describe('CustomElementRegistry.prototype', function () {
     });
 });
 
-},{"./util":114,"expect.js":30,"mocha":47}],112:[function(require,module,exports){
+},{"./util":112}],110:[function(require,module,exports){
 /// <reference path="../node_modules/expect.js/index.js" />
 /// <reference path="../node_modules/mocha/mocha.js" />
 
 'use strict';
-
-var expect = require('expect.js') || window.expect,
-    mocha = require('mocha') || window.mocha;
 
 describe('The global (window) object', function () {
     describe('\'CustomElementRegistry\' property', function () {
@@ -19623,13 +18442,13 @@ describe('The global (window) object', function () {
     });
 });
 
-},{"expect.js":30,"mocha":47}],113:[function(require,module,exports){
+},{}],111:[function(require,module,exports){
 /// <reference path="../../node_modules/mocha/mocha.js" />
 
 'use strict';
 
 var builtInElements = require('../lib/browser/built-in-elements'),
-    mocha = require('mocha') && window.mocha,
+    mocha = require('mocha').mocha,
     util = require('./util'),
 
     flattenTitles = util.flattenTitles,
@@ -19709,11 +18528,9 @@ require('./spec-CustomElementRegistry-whenDefined');
 
 runTests();
 
-},{"../lib/browser/built-in-elements":1,"./spec-CustomElementRegistry":111,"./spec-CustomElementRegistry-define":108,"./spec-CustomElementRegistry-get":109,"./spec-CustomElementRegistry-whenDefined":110,"./spec-window":112,"./util":114,"mocha":47}],114:[function(require,module,exports){
+},{"../lib/browser/built-in-elements":1,"./spec-CustomElementRegistry":109,"./spec-CustomElementRegistry-define":106,"./spec-CustomElementRegistry-get":107,"./spec-CustomElementRegistry-whenDefined":108,"./spec-window":110,"./util":112,"mocha":45}],112:[function(require,module,exports){
 'use strict';
 
-require('expect.js');
-require('mocha');
 require('../lib/browser/other-polyfills/Object.getOwnPropertyDescriptors');
 
 var builtInElements = require('../lib/browser/built-in-elements'),
@@ -20052,4 +18869,4 @@ Object.defineProperties(module.exports, {
     }
 });
 
-},{"../lib/browser/built-in-elements":1,"../lib/browser/other-polyfills/Object.getOwnPropertyDescriptors":3,"expect.js":30,"mocha":47}]},{},[113]);
+},{"../lib/browser/built-in-elements":1,"../lib/browser/other-polyfills/Object.getOwnPropertyDescriptors":3,"expect.js":28}]},{},[111]);

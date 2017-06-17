@@ -1,7 +1,5 @@
 'use strict';
 
-require('expect.js');
-require('mocha');
 require('../lib/browser/other-polyfills/Object.getOwnPropertyDescriptors');
 
 var builtInElements = require('../lib/browser/built-in-elements'),
