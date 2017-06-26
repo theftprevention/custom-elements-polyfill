@@ -5,7 +5,6 @@
 
     require('./other-polyfills/Array.from');
     require('./other-polyfills/DOMException');
-    require('./other-polyfills/Object.getOwnPropertyDescriptors');
 
     var common = require('./common'),
         baseElementConstructor,
@@ -130,21 +129,22 @@
         var names = builtInElements.interfaceNames,
             i = 0,
             l = names.length,
-            name, interf, proxy;
+            HTMLElement = window.HTMLElement,
+            name, interf, finalConstructor;
 
-        window.HTMLElement = classes.proxy((nativeCustomElements ? window.HTMLElement : function () {
+        window.HTMLElement = classes.proxy(HTMLElement, (nativeCustomElements ? window.HTMLElement : function () {
             return baseElementConstructor.call(this, HTMLElement);
-        }), HTMLElement, 'HTMLElement');
+        }));
 
         while (i < l) {
             name = names[i++];
             interf = builtInElements.constructorFromInterfaceName(name);
-            proxy = nativeCustomElements && nativeCustomElements.canExtend ? interf : (function (a) {
+            finalConstructor = nativeCustomElements && nativeCustomElements.canExtend ? interf : (function (a) {
                 return function () {
                     return baseElementConstructor.call(this, a);
                 };
             })(interf);
-            window[name] = classes.proxy(proxy, interf, name);
+            window[name] = classes.proxy(interf, finalConstructor);
         }
 
     })();
@@ -191,7 +191,7 @@
 
 })(typeof global !== 'undefined' ? global : (typeof self !== 'undefined' ? self : (typeof window !== 'undefined' ? window : {})));
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./base-element-constructor":2,"./built-in-elements":3,"./classes":4,"./common":5,"./custom-element-registry":10,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./other-polyfills/Array.from":13,"./other-polyfills/DOMException":14,"./other-polyfills/Object.getOwnPropertyDescriptors":15,"./reactions":17,"./shims":18}],2:[function(require,module,exports){
+},{"./base-element-constructor":2,"./built-in-elements":3,"./classes":4,"./common":5,"./custom-element-registry":10,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./other-polyfills/Array.from":13,"./other-polyfills/DOMException":14,"./reactions":16,"./shims":17}],2:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
@@ -220,7 +220,7 @@ var common = require('./common'),
  *   constructors have been run.
  */
 module.exports = function baseElementConstructor(activeFunction) {
-    var thisPrototype = this instanceof Object ? getPrototypeOf(this) : null,
+    var thisPrototype = this == null ? null : getPrototypeOf(this),
         definition = thisPrototype ? CustomElementDefinition.fromPrototype(thisPrototype) : null,
         element, prototype, props, i;
 
@@ -317,7 +317,7 @@ module.exports = function baseElementConstructor(activeFunction) {
     return element;
 }
 
-},{"./common":5,"./conformance":6,"./custom-element-definition":8,"./custom-element-properties":9,"./reactions":17}],3:[function(require,module,exports){
+},{"./common":5,"./conformance":6,"./custom-element-definition":8,"./custom-element-properties":9,"./reactions":16}],3:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
@@ -329,7 +329,11 @@ var common = require('./common'),
     Document_createElement = Document.prototype.createElement,
     getOwnPropertyNames = Object.getOwnPropertyNames,
     hasOwnProperty = common.hasOwnProperty,
+    HTMLElement = window.HTMLElement,
+    HTMLElementProto = HTMLElement.prototype,
     interfaceNames,
+    interfaces = [],
+    isPrototypeOf = common.isPrototypeOf,
     // 'predefinedTagNames' is an object where each key is the name of a native HTML element
     // interface and each value is a string or an array of strings, each of which is the
     // localName of an element that is known to implement that interface.
@@ -356,6 +360,7 @@ var common = require('./common'),
         HTMLUnknownElement: [] // abstract
     },
     props = getOwnPropertyNames(window),
+    prototypes = [],
     reg_htmlInterface = /^HTML(.+)Element$/,
     toLower = (function () {
         var S = String,
@@ -367,6 +372,7 @@ var common = require('./common'),
 
     i = 0,
     l = props.length,
+    n = 1,
     name, match, interf, tagNames, isPredefined, element, t, tagName;
 
 /**
@@ -378,11 +384,53 @@ function constructorFromInterfaceName(interfaceName) {
 }
 
 /**
+ * @param {object} prototype
+ * @returns {?function}
+ */
+function constructorFromPrototype(prototype) {
+    var i = prototypes.length;
+    while (i--) {
+        if (prototype === prototypes[i]) {
+            return interfaces[i];
+        }
+    }
+    return null;
+}
+
+/**
  * @param {string} tagName
  * @returns {?function}
  */
 function constructorFromTagName(tagName) {
     return constructorsByTagName[tagName] || null;
+}
+
+/**
+ * @param {function} constructor
+ * @returns {boolean}
+ */
+function isElementInterface(constructor) {
+    var i = interfaces.length;
+    while (i--) {
+        if (constructor === interfaces[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @param {object} proto
+ * @returns {boolean}
+ */
+function isElementPrototype(proto) {
+    var i = prototypes.length;
+    while (i--) {
+        if (proto === prototypes[i]) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -393,12 +441,17 @@ function isKnownTagName(tagName) {
     return hasOwnProperty(constructorsByTagName, tagName);
 }
 
+interfaces[0] = HTMLElement;
+prototypes[0] = HTMLElementProto;
+
 while (i < l) {
     name = props[i++];
     match = reg_htmlInterface.exec(name);
     interf = match == null ? null : window[name];
-    if (interf && hasOwnProperty(interf, 'prototype') && interf.prototype instanceof HTMLElement) {
+    if (interf && interf.prototype && isPrototypeOf(HTMLElementProto, interf.prototype)) {
         constructorsByInterfaceName[name] = interf;
+        interfaces[n++] = interf;
+        prototypes[n] = interf.prototype;
         isPredefined = hasOwnProperty(predefinedTagNames, name);
         if (isPredefined) {
             tagNames = predefinedTagNames[name];
@@ -427,8 +480,11 @@ interfaceNames = getOwnPropertyNames(constructorsByInterfaceName);
 
 module.exports = {
     constructorFromInterfaceName: constructorFromInterfaceName,
+    constructorFromPrototype: constructorFromPrototype,
     constructorFromTagName: constructorFromTagName,
     interfaceNames: interfaceNames,
+    isElementInterface: isElementInterface,
+    isElementPrototype: isElementPrototype,
     isKnownTagName: isKnownTagName,
     tagNames: allTagNames
 };
@@ -437,222 +493,194 @@ module.exports = {
 'use strict';
 
 var common = require('./common'),
+    PrivatePropertyStore = require('./private-property-store'),
 
     arrayFrom = Array.from,
     copyProperties = common.copyProperties,
-    create = Object.create,
-    defineProperty = Object.defineProperty,
-    defineProperties = Object.defineProperties,
     Function_toString = Function.prototype.toString,
     getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
     getPrototypeOf = Object.getPrototypeOf,
     globalEval = window.eval,
     hasOwnProperty = common.hasOwnProperty,
     ObjectProto = Object.prototype,
+    Object_create = Object.create,
     Object_toString = ObjectProto.toString,
-    proxies = new Map(),
+    proxies = new PrivatePropertyStore('ClassProxy'),
     reg_ctorName = /^\s*(?:class|function)\s+([^\s\{\(]+)/,
     reg_objName = /^\[object (.+)\]$/,
     String = window.String,
     supportsClasses = (function () {
         try {
-            eval('class A{}');
+            globalEval('(function(){return class A{};})()');
             return true;
         } catch (ex) {
             return false;
         }
     })(),
-    toStringTag = window.Symbol && typeof window.Symbol.toStringTag === 'symbol' ? window.Symbol.toStringTag : null,
-    TypeError = window.TypeError;
+    toStringTag = window.Symbol && typeof window.Symbol.toStringTag === 'symbol' ? window.Symbol.toStringTag : null;
 
 /**
- * @class
+ * Creates a new ClassProxy.
+ * 
+ * @class ClassProxy
+ * @classdesc Represents a function that is rewritten as an ES6 class.
  * 
  * @param {function} constructor
  * @param {function} [finalConstructor]
- * @param {string} [name]
- * @param {boolean} [isElementInterface]
  * 
- * @property {function} baseConstructor - The constructor for the class that is extended
- *   by this proxied constructor. This may also be a ProxiedConstructor's "finalConstructor".
- * @property {boolean} baseIsClass - Whether or not the baseConstructor was declared as part
- *   of a "class" declaration.
  * @property {function} finalConstructor - The final proxied constructor, appropriate for
  *   use with the 'new' keyword.
  * @property {boolean} isClass - Whether or not the finalConstructor is part of a "class"
  *   declaration.
- * @property {boolean} isElementInterface - Whether or not this is a proxied constructor for
- *   a built-in element interface (such as HTMLDivElement).
- * @property {string} name - The name of the proxied constructor.
+ * @property {boolean} isElementInterface - Whether or not the current ClassProxy
+ *   represents a built-in HTML element interface that has been patched for use as a base
+ *   class.
  * @property {function} originalConstructor - The original constructor.
+ * @property {boolean} wasFunction - Whether or not the originalConstructor is a function
+ *   (and not an ES6 class).
  */
-function ClassProxy(constructor, finalConstructor, name, isElementInterface) {
+function ClassProxy(constructor, finalConstructor) {
 
-    var constructorBody, hasBase, baseConstructor, basePrototype, prototype, declarationBody,
-        source, finalPrototype, descriptor, boundIllegalConstructorError;
+    var prototype = (finalConstructor || constructor).prototype,
+        baseConstructor, basePrototype, initializer, source;
 
     this.originalConstructor = constructor;
-    this.name = name || getClassName(constructor);
+    this.wasFunction = !isClass(constructor);
 
     proxies.set(constructor, this);
-    proxies.set(constructor.prototype, this);
-
-    if (!isElementInterface && isClass(constructor)) {
-        finalConstructor = constructor;
-    }
+    proxies.set(prototype, this);
 
     if (finalConstructor) {
         this.finalConstructor = finalConstructor;
-        this.originalConstructor = finalConstructor;
-        this.isElementInterface = !!isElementInterface;
-        this.isClass = supportsClasses && !isElementInterface;
-
         if (constructor !== finalConstructor) {
+            this.isElementInterface = true;
+            this.finalConstructor.prototype = prototype;
+            this.isClass = false;
             proxies.set(finalConstructor, this);
-            copyProperties(constructor, finalConstructor);
-            finalConstructor.prototype = constructor.prototype;
-            finalConstructor.prototype.constructor = finalConstructor;
-            if (this.name && toStringTag && !hasOwnProperty(finalConstructor.prototype, toStringTag)) {
-                defineProperty(finalConstructor.prototype, toStringTag, {
-                    configurable: true,
-                    value: this.name
-                });
-            }
+        } else {
+            this.isClass = supportsClasses;
         }
-
+        return this;
+    } else if (!this.wasFunction) {
+        this.isClass = true;
         return this;
     }
 
     this.isClass = supportsClasses;
-
-    basePrototype = getPrototypeOf(constructor.prototype);
+    basePrototype = getPrototypeOf(prototype);
+    
     if (basePrototype != null && basePrototype !== ObjectProto) {
-        hasBase = true;
-        baseConstructor = basePrototype.constructor;
-        if (typeof baseConstructor !== 'function' || baseConstructor.prototype !== basePrototype) {
-            baseConstructor = function () { };
-            baseConstructor.prototype = basePrototype;
+        this.baseProxy = proxies.get(basePrototype);
+        if (!this.baseProxy) {
+            baseConstructor = basePrototype.constructor;
+            if (typeof baseConstructor !== 'function' || baseConstructor.prototype !== basePrototype) {
+                baseConstructor = function () { };
+                baseConstructor.prototype = basePrototype;
+            }
+            this.baseProxy = new ClassProxy(baseConstructor);
         }
-        this.baseProxy = getOrCreateProxy(baseConstructor);
         baseConstructor = this.baseProxy.finalConstructor;
+    } else if (this.isClass) {
+        baseConstructor = constructor;
+        basePrototype = baseConstructor.prototype;
+    } else {
+        basePrototype = Object_create(prototype);
     }
 
-    prototype = constructor.prototype;
-    constructorBody = '';
-
-    if (!this.isClass) {
-        constructorBody += 'var x=';
-    } else if (hasBase) {
-        constructorBody += 'super();';
-    }
-    constructorBody += 'A.init(this,arguments);';
-    if (!this.isClass) {
-        constructorBody += 'return x;';
+    if (!this.isClass && this.baseProxy && this.baseProxy.isElementInterface) {
+        initializer = initElementSubclass.bind(null, constructor, this.baseProxy.finalConstructor);
+    } else {
+        initializer = initDefault.bind(null, constructor);
     }
 
-    declarationBody = (this.isClass ? 'class ' + (hasBase ? ' extends B' : '') : 'function()') + '{';
-    declarationBody += (this.isClass ? 'constructor(){' : '') + constructorBody + (this.isClass ? '}' : '') + '}';
-
-    source = '(function(){return function(A,B){return ' + declarationBody + ';};})();';
-
-    finalConstructor = globalEval(source)(this, baseConstructor);
-    this.finalConstructor = finalConstructor;
-    if (!this.isClass) {
-        proxies.set(finalConstructor, this);
-        descriptor = getOwnPropertyDescriptor(finalConstructor, 'prototype');
-        if (!descriptor || descriptor.writable) {
-            finalConstructor.prototype = create(basePrototype);
-        }
-    }
-    finalPrototype = finalConstructor.prototype;
-    proxies.set(finalPrototype, this);
-
-    copyProperties(constructor, finalConstructor);
-    copyProperties(prototype, finalPrototype);
-    if (toStringTag && this.name) {
-        descriptor = getOwnPropertyDescriptor(this.finalConstructor.prototype, toStringTag);
-        if (!descriptor || descriptor.configurable) {
-            defineProperty(finalPrototype, toStringTag, {
-                configurable: true,
-                value: this.name,
-                writable: true
-            });
-        } else if (descriptor && descriptor.writable) {
-            finalPrototype[toStringTag] = this.name;
-        }
+    if (this.isClass) {
+        source = '(function(){return function(init,base){return class extends base{constructor(){super();init(this,arguments);}};};})();';
+        this.finalConstructor = globalEval(source)(initializer, baseConstructor);
+    } else {
+        this.finalConstructor = (function (init) {
+            return function () { return init(this, arguments); };
+        })(initializer);
+        this.finalConstructor.prototype = this.baseProxy ? Object_create(basePrototype) : prototype;
+        this.finalConstructor.prototype.constructor = constructor;
     }
 
-    descriptor = getOwnPropertyDescriptor(finalPrototype, 'constructor');
-    if (!descriptor || descriptor.writable) {
-        finalPrototype.constructor = finalConstructor;
-    } else if (descriptor.configurable) {
-        defineProperty(finalPrototype, 'constructor', {
-            configurable: true,
-            enumerable: descriptor.enumerable,
-            value: this.name,
-            writable: false
-        });
-    }
+    proxies.set(this.finalConstructor, this);
 
-    boundIllegalConstructorError = illegalConstructorError.bind(null, this.name);
+    constructor.prototype = this.finalConstructor.prototype;
+    constructor.prototype.constructor = this.originalConstructor;
+    copyProperties(constructor, this.finalConstructor);
 
-    descriptor = getOwnPropertyDescriptor(finalConstructor, 'apply');
-    if (!descriptor || descriptor.configurable) {
-        defineProperty(finalConstructor, 'apply', {
-            configurable: false,
-            enumerable: false,
-            value: boundIllegalConstructorError,
-            writable: false
-        });
-    }
-    descriptor = getOwnPropertyDescriptor(finalConstructor, 'call');
-    if (!descriptor || descriptor.configurable) {
-        defineProperty(finalConstructor, 'call', {
-            configurable: false,
-            enumerable: false,
-            value: boundIllegalConstructorError,
-            writable: false
-        });
+    if (this.baseProxy) {
+        copyProperties(prototype, this.finalConstructor.prototype);
+        proxies.set(this.finalConstructor.prototype, this);
     }
 }
 
-defineProperties(ClassProxy.prototype, {
+Object.defineProperties(ClassProxy.prototype, {
     constructor: {
         value: ClassProxy
     },
-    baseConstructor: {
-        get: function () {
-            return this.baseProxy ? this.baseProxy.finalConstructor : null;
-        }
-    },
-    baseIsClass: {
-        get: function () {
-            return this.baseProxy ? this.baseProxy.isClass : false;
-        }
-    },
+
     baseProxy: {
+        enumerable: true,
+        value: null,
+        writable: true
+    },
+    finalConstructor: {
+        enumerable: true,
         value: null,
         writable: true
     },
     isClass: {
+        enumerable: true,
         value: false,
         writable: true
     },
-
-    init: {
-        value: function init(thisArg, args) {
-            var result;
-            args = arrayFrom(args);
-            if (!this.isClass && this.baseProxy && !this.baseIsClass) {
-                result = this.baseProxy.init(thisArg, args);
-            } else {
-                result = thisArg;
-            }
-            this.originalConstructor.apply(result, args);
-            return result;
-        }
+    isElementInterface: {
+        enumerable: true,
+        value: false,
+        writable: true
+    },
+    originalConstructor: {
+        enumerable: true,
+        value: null,
+        writable: true
+    },
+    prototype: {
+        enumerable: true,
+        value: null,
+        writable: true
+    },
+    wasFunction: {
+        enumerable: true,
+        value: false,
+        writable: true
     }
 });
+
+/**
+ * @param {function} constructor
+ * @param {*} thisArg
+ * @param {Array} args
+ * @returns {object}
+ */
+function initDefault(constructor, thisArg, args) {
+    constructor.apply(thisArg, arrayFrom(args));
+    return thisArg;
+}
+
+/**
+ * @param {function} constructor
+ * @param {function} preConstructor
+ * @param {*} thisArg
+ * @param {Array} args
+ * @returns {object}
+ */
+function initElementSubclass(constructor, preConstructor, thisArg, args) {
+    var result = preConstructor.call(thisArg);
+    constructor.apply(result, arrayFrom(args));
+    return result;
+}
 
 /**
  * @param {object} target
@@ -710,33 +738,6 @@ function getClassName(target) {
 }
 
 /**
- * @param {function} constructor
- * @param {function} [elementInterface]
- * @param {string} [elementInterfaceName]
- * @returns {ClassProxy}
- */
-function getOrCreateProxy(constructor, elementInterface, elementInterfaceName) {
-    var proxy = proxies.get(constructor.prototype) || proxies.get(constructor);
-    if (proxy) {
-        return proxy;
-    }
-    if (elementInterface) {
-        return new ClassProxy(elementInterface, constructor, elementInterfaceName, true);
-    }
-    return new ClassProxy(constructor);
-}
-
-/**
- * @param {string} [className]
- */
-function illegalConstructorError(className) {
-    if (!className) {
-        className = 'Object';
-    }
-    throw new TypeError("Failed to construct '" + className + "': Please use the 'new' operator. This DOM object constructor cannot be called as a function.");
-}
-
-/**
  * Returns true if the parameter is a function, and was defined using ES6 class
  * syntax; otherwise, returns false.
  * 
@@ -759,15 +760,18 @@ function isClass(fn) {
 
 /**
  * @param {function} constructor
- * @param {function} [elementInterface]
- * @param {string} [elementInterfaceName]
+ * @param {function} [finalConstructor]
  * @returns {function}
  */
-function proxy(constructor, elementInterface, elementInterfaceName) {
+function proxy(constructor, finalConstructor) {
+    var proxy = proxies.get(constructor);
+    if (proxy) {
+        return proxy.finalConstructor;
+    }
     if (typeof constructor !== 'function' || !(constructor.prototype instanceof Object)) {
         return constructor;
     }
-    return getOrCreateProxy(constructor, elementInterface, elementInterfaceName).finalConstructor;
+    return new ClassProxy(constructor, finalConstructor).finalConstructor;
 }
 
 module.exports = {
@@ -777,12 +781,17 @@ module.exports = {
     supported: supportsClasses
 };
 
-},{"./common":5}],5:[function(require,module,exports){
+},{"./common":5,"./private-property-store":15}],5:[function(require,module,exports){
 'use strict';
 
-var defineProperties = Object.defineProperties,
+require('./private-property-store');
+
+var concat,
+    defineProperties = Object.defineProperties,
     getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
     getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors,
+    getOwnPropertyNames = Object.getOwnPropertyNames,
+    getOwnPropertySymbols = Object.getOwnPropertySymbols || function () { return []; },
     hOP = Object.prototype.hasOwnProperty,
     iPO = Object.prototype.isPrototypeOf,
 
@@ -805,6 +814,30 @@ var defineProperties = Object.defineProperties,
     nextElementIsSynchronous = false,
     Number = window.Number,
     shimStack = 0;
+
+if (!getOwnPropertyDescriptors) {
+    concat = Array.prototype.concat;
+    getOwnPropertyDescriptors = function getOwnPropertyDescriptors(O) {
+        var keys = concat.call(getOwnPropertyNames(O), getOwnPropertySymbols(O)),
+            i = 0,
+            l = keys.length,
+            result = {},
+            key, descriptor;
+        while (i < l) {
+            key = keys[i++];
+            descriptor = getOwnPropertyDescriptor(O, key);
+            if (descriptor) {
+                result[key] = descriptor;
+            }
+        }
+        return result;
+    };
+    Object.defineProperty(Object, 'getOwnPropertyDescriptors', {
+        configurable: true,
+        value: getOwnPropertyDescriptors,
+        writable: true
+    });
+}
 
 /**
  * @private
@@ -848,6 +881,7 @@ function arrayContains(array, value) {
 /**
  * @param {object} from
  * @param {object} to
+ * @returns {object}
  */
 function copyProperties(from, to) {
     var toDescriptors = {},
@@ -864,7 +898,7 @@ function copyProperties(from, to) {
             }
         }
     }
-    defineProperties(to, toDescriptors);
+    return defineProperties(to, toDescriptors);
 }
 
 /**
@@ -1007,7 +1041,7 @@ module.exports = defineProperties({}, {
     }
 });
 
-},{}],6:[function(require,module,exports){
+},{"./private-property-store":15}],6:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
@@ -1382,7 +1416,7 @@ module.exports = function createElement(document, localName, namespace, prefix, 
     return result;
 };
 
-},{"./common":5,"./custom-element-definition":8,"./custom-element-properties":9,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./reactions":17}],8:[function(require,module,exports){
+},{"./common":5,"./custom-element-definition":8,"./custom-element-properties":9,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./reactions":16}],8:[function(require,module,exports){
 'use strict';
 
 /**
@@ -1685,7 +1719,7 @@ module.exports = CustomElementDefinition;
 'use strict';
 
 var common = require('./common'),
-    priv = require('./private-property-provider')('CustomElement'),
+    priv = require('./private-property-store')('CustomElement'),
 
     conformanceStatus = common.conformanceStatus,
     getPrototypeOf = Object.getPrototypeOf,
@@ -1778,7 +1812,7 @@ CustomElementProperties.get = function get(element) {
 
 module.exports = CustomElementProperties;
 
-},{"./common":5,"./private-property-provider":16}],10:[function(require,module,exports){
+},{"./common":5,"./private-property-store":15}],10:[function(require,module,exports){
 'use strict';
 
 var builtInElements = require('./built-in-elements'),
@@ -2249,7 +2283,7 @@ CustomElementRegistry.prototype.whenDefined = function whenDefined(name) {
 
 module.exports = CustomElementRegistry;
 
-},{"./built-in-elements":3,"./classes":4,"./common":5,"./custom-element-definition":8,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./reactions":17}],11:[function(require,module,exports){
+},{"./built-in-elements":3,"./classes":4,"./common":5,"./custom-element-definition":8,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./reactions":16}],11:[function(require,module,exports){
 'use strict';
 
 var reg_reservedTagNames = /^(?:annotation-xml|color-profile|font-face(?:-(?:src|uri|format|name))?|missing-glyph)$/,
@@ -2618,69 +2652,31 @@ module.exports = (function () {
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
 },{}],15:[function(require,module,exports){
-module.exports = (function () {
-    var getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
-        getOwnPropertyNames = Object.getOwnPropertyNames,
-        getOwnPropertySymbols = Object.getOwnPropertySymbols;
-
-    if (typeof Object.getOwnPropertyDescriptors !== 'function') {
-        Object.defineProperty(Object, 'getOwnPropertyDescriptors', {
-            configurable: true,
-            /**
-             * @param {object} O
-             * @returns {object}
-             */
-            value: function getOwnPropertyDescriptors(O) {
-                var names = getOwnPropertyNames(O),
-                    i = 0,
-                    l = names.length,
-                    result = {},
-                    name;
-                while (i < l) {
-                    name = names[i++];
-                    result[name] = getOwnPropertyDescriptor(O, name);
-                }
-                if (getOwnPropertySymbols) {
-                    names = getOwnPropertySymbols;
-                    i = 0;
-                    l = names.length;
-                    while (i < l) {
-                        name = names[i++];
-                        result[name] = getOwnPropertyDescriptor(O, name);
-                    }
-                }
-                return result;
-            },
-            writable: true
-        });
-    }
-
-    return Object.getOwnPropertyDescriptors;
-    
-})();
-
-},{}],16:[function(require,module,exports){
 'use strict';
 
-var common = require('./common'),
-
+var concat = Array.prototype.concat,
     createKey,
     defineProperties = Object.defineProperties,
     defineProperty = Object.defineProperty,
     deletePrivateProperties,
     getDescriptor,
     getDescriptors,
+    getDescriptorsNew,
     getPrivateProperties,
     getNames,
     getSymbols,
-    hasOwnProperty = common.hasOwnProperty,
+    getSymbolsNew,
+    hasOwnProperty = (function () {
+        var hOP = Object.prototype.hasOwnProperty;
+        return function hasOwnProperty(O, p) {
+            return hOP.call(O, p);
+        };
+    })(),
     hasPrivateProperties,
-    inc,
-    Number_toString,
-    privateKeys,
+    privateSymbols,
     setPrivateProperties,
     Symbol = typeof window.Symbol === 'function' && window.Symbol,
-    WeakMap = typeof window.WeakMap === 'function' && window.WeakMap,
+    WeakMap = window.WeakMap,
     WeakMap_get,
     WeakMap_set;
 
@@ -2689,109 +2685,101 @@ var common = require('./common'),
  * @returns {boolean}
  */
 function isObject(target) {
-    return target != null && typeof target === 'object';
+    var t = target != null && typeof target;
+    return t === 'function' || t === 'object';
 }
 
-if (Symbol || !WeakMap) {
+if (Symbol) {
 
-    getNames = Object.getOwnPropertyNames;
-    privateKeys = [];
+    getDescriptors = Object.getOwnPropertyDescriptors;
+    getSymbols = Object.getOwnPropertySymbols;
+    privateSymbols = [];
 
-    if (Symbol) {
-        /**
-         * @param {string} [name]
-         * @returns {Symbol}
-         */
-        createKey = function createKey(name) {
-            var key = Symbol(name || 'private');
-            privateKeys[privateKeys.length] = key;
-            return key;
-        };
-
-        getSymbols = Object.getOwnPropertySymbols;
-        Object.getOwnPropertySymbols = function getOwnPropertySymbols() {
-            var symbols = getSymbols(arguments[0]),
-                p = privateKeys.length,
-                s = symbols.length,
-                result = [],
-                r = 0,
-                j, key, symbol;
-            while (p--) {
-                key = privateKeys[p];
-                j = 0;
-                while (j < s) {
-                    symbol = symbols[j++];
-                    if (symbol !== key) {
-                        result[r++] = symbol;
-                    }
-                }
-            }
-            return result;
-        };
-    } else {
-        inc = (Math.random() * 10000) >>> 0;
-        Number_toString = Number.prototype.toString;
-        /**
-         * @param {string} [name]
-         * @returns {string}
-         */
-        createKey = function createKey(name) {
-            var key = 'private:';
-            if (name) {
-                key += name + ':';
-            }
-            key += Number_toString.call(inc++, 16);
-            privateKeys[privateKeys.length] = key;
-            return key;
-        };
-        Object.getOwnPropertyNames = function getOwnPropertyNames() {
-            var names = getNames(arguments[0]),
-                p = privateKeys.length,
-                s = names.length,
-                result = [],
-                r = 0,
-                j, key, name;
-            while (p--) {
-                key = privateKeys[p];
-                j = 0;
-                while (j < s) {
-                    name = names[j++];
-                    if (name !== key) {
-                        result[r++] = name;
-                    }
-                }
-            }
-            return result;
-        };
-    }
-
-    getDescriptor = Object.getOwnPropertyDescriptor;
-    Object.getOwnPropertyDescriptor = function getOwnPropertyDescriptor() {
-        var p = privateKeys.length,
-            key = arguments[1],
-            target = arguments[0];
+    /**
+     * @param {string} [name]
+     * @returns {Symbol}
+     */
+    createKey = function createKey(name) {
+        var key = Symbol(name || 'private');
+        privateSymbols[privateSymbols.length] = key;
+        return key;
+    };
+    /**
+     * @param {object} O
+     * @returns {Array.<Symbol>}
+     */
+    getSymbolsNew = function getOwnPropertySymbols(O) {
+        var symbols = getSymbols(O),
+            p = privateSymbols.length,
+            s = symbols.length,
+            result = [],
+            r = 0,
+            j, key, symbol;
         while (p--) {
-            if (key === privateKeys[p]) {
-                return void 0;
+            key = privateSymbols[p];
+            j = 0;
+            while (j < s) {
+                symbol = symbols[j++];
+                if (symbol !== key) {
+                    result[r++] = symbol;
+                }
             }
         }
-        return getDescriptor(target, key);
+        return result;
     };
-    getDescriptors = Object.getOwnPropertyDescriptors;
+
     if (getDescriptors) {
-        Object.getOwnPropertyDescriptors = function getOwnPropertyDescriptors() {
-            var descriptors = getDescriptors(arguments[0]),
-                p = privateKeys.length,
+        /**
+         * @param {obejct} O
+         * @returns {object}
+         */
+        getDescriptorsNew = function getOwnPropertyDescriptors(O) {
+            var descriptors = getDescriptors(O),
+                p = privateSymbols.length,
                 key;
             while (p--) {
-                key = privateKeys[p];
+                key = privateSymbols[p];
                 if (descriptors[key]) {
                     delete descriptors[key];
                 }
             }
             return descriptors;
         };
+    } else {
+        getDescriptor = Object.getOwnPropertyDescriptor;
+        getNames = Object.getOwnPropertyNames;
+        /**
+         * @param {obejct} O
+         * @returns {object}
+         */
+        getDescriptorsNew = function getOwnPropertyDescriptors(O) {
+            var keys = concat.call(getNames(O), getSymbolsNew(O)),
+                i = 0,
+                l = keys.length,
+                result = {},
+                key, descriptor;
+            while (i < l) {
+                key = keys[i++];
+                descriptor = getDescriptor(O, key);
+                if (descriptor) {
+                    result[key] = descriptor;
+                }
+            }
+            return result;
+        };
     }
+    defineProperties(Object, {
+        getOwnPropertyDescriptors: {
+            configurable: true,
+            writable: true,
+            value: getDescriptorsNew
+        },
+        getOwnPropertySymbols: {
+            configurable: true,
+            writable: true,
+            value: getSymbolsNew
+        }
+    });
 
     /**
      * @param {object} owner
@@ -2811,7 +2799,7 @@ if (Symbol || !WeakMap) {
      * @this {Symbol}
      */
     getPrivateProperties = function getPrivateProperties(owner) {
-        return hasPrivateProperties.call(this, owner) ? owner[this] : null;
+        return hasPrivateProperties.call(this, owner) ? owner[this] : void 0;
     };
     /**
      * @param {object} owner
@@ -2875,23 +2863,23 @@ if (Symbol || !WeakMap) {
 }
 
 /**
- * Creates a new PrivatePropertyProvider.
+ * Creates a new PrivatePropertyStore.
  * 
  * @class
  * 
  * @classdesc A dictionary that manages private properties. Key objects ("owners") are
  *   associated with their assigned values in a manner that is safe from memory leaks and
- *   prevents the values from being accessed externally (or from any PrivatePropertyProvider
+ *   prevents the values from being accessed externally (or from any PrivatePropertyStore
  *   instance other than the one used to create the association).
  * 
  * @param {string} [name] - An optional name. If the Symbol implementation is used, then this
- *   is the argument sent to the Symbol constructor for the key used by the provider. If the
+ *   is the argument sent to the Symbol constructor for the key used by the store. If the
  *   WeakMap implementation is used, then this parameter is ignored.
  */
-function PrivatePropertyProvider(name) {
+function PrivatePropertyStore(name) {
     var key;
-    if (!(this instanceof PrivatePropertyProvider)) {
-        return arguments.length > 0 ? new PrivatePropertyProvider(name) : new PrivatePropertyProvider();
+    if (!(this instanceof PrivatePropertyStore)) {
+        return arguments.length > 0 ? new PrivatePropertyStore(name) : new PrivatePropertyStore();
     }
     key = createKey(arguments.length > 0 ? name : '');
     return defineProperties(this, {
@@ -2910,15 +2898,15 @@ function PrivatePropertyProvider(name) {
     });
 }
 
-module.exports = PrivatePropertyProvider;
+module.exports = PrivatePropertyStore;
 
-},{"./common":5}],17:[function(require,module,exports){
+},{}],16:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
     CustomElementDefinition = require('./custom-element-definition'),
     CustomElementProperties = require('./custom-element-properties'),
-    PrivatePropertyProvider = require('./private-property-provider'),
+    PrivatePropertyStore = require('./private-property-store'),
 
     ADOPTED_CALLBACK = common.callbackNames.adopted,
     ATTRIBUTE_CALLBACK = common.callbackNames.attributeChanged,
@@ -3011,7 +2999,7 @@ var common = require('./common'),
      * Contains weak references to the documents that are being observed by
      *   the childListObserver.
      */
-    documents = new PrivatePropertyProvider(),
+    documents = new PrivatePropertyStore('DocumentProperties'),
     /**
      * Contains any MutationRecords taken from the global attributeObserver which
      *   have been suspended until there are no more element queues in the reaction
@@ -3789,7 +3777,7 @@ module.exports = Object.defineProperties({}, {
     upgradeElement: upgradeElement
 });
 
-},{"./common":5,"./custom-element-definition":8,"./custom-element-properties":9,"./private-property-provider":16}],18:[function(require,module,exports){
+},{"./common":5,"./custom-element-definition":8,"./custom-element-properties":9,"./private-property-store":15}],17:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
@@ -4447,4 +4435,4 @@ module.exports = {
     shim: shim
 };
 
-},{"./common":5,"./create-element":7,"./custom-element-definition":8,"./custom-element-properties":9,"./reactions":17}]},{},[1]);
+},{"./common":5,"./create-element":7,"./custom-element-definition":8,"./custom-element-properties":9,"./reactions":16}]},{},[1]);

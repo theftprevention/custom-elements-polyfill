@@ -4,8 +4,8 @@ const
     webdriver = require('selenium-webdriver'),
 
     by = webdriver.By,
-    checkInterval = 5000,
-    checkIntervalSeconds = checkInterval / 1000,
+    checkInterval = 10,
+    checkIntervalMs = checkInterval * 1000,
     sauceApiUrl = 'https://saucelabs.com/rest/v1/',
     completedJobs = [],
     runningJobIds = [],
@@ -22,8 +22,8 @@ const whenJobsCompleted = (function () {
     var resolve, reject, promise;
 
     function scheduleJobCheck() {
-        console.log('Launching status request ' + (checkCount + 1) + ' in ' + checkIntervalSeconds + ' second' + (checkIntervalSeconds === 1 ? '' : 's') + '.');
-        setTimeout(checkJobs, checkInterval);
+        console.log('Launching status request ' + (checkCount + 1) + ' in ' + checkInterval + ' second' + (checkInterval === 1 ? '' : 's') + '.');
+        setTimeout(checkJobs, checkIntervalMs);
     }
 
     function checkJobs() {

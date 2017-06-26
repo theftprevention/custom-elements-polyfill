@@ -30,8 +30,7 @@ const
 
     polyfillMap = {
         'Array.from': pathTo('lib/browser/other-polyfills/Array.from.js'),
-        'DOMException': pathTo('lib/browser/other-polyfills/DOMException.js'),
-        'Object.getOwnPropertyDescriptors': pathTo('lib/browser/other-polyfills/Object.getOwnPropertyDescriptors.js')
+        'DOMException': pathTo('lib/browser/other-polyfills/DOMException.js')
     },
     polyfillNames = getOwnPropertyNames(polyfillMap);
 
@@ -40,9 +39,9 @@ const
  *   custom elements polyfill bundle. It defaults to true.
  * 
  * If this is an array, then it is interpreted as a list of optional polyfills that should be
- *   included in the bundle. Valid values are "Array.from", "DOMException", and
- *   "Object.getOwnPropertyDescriptor" (names are case-insensitive). Any polyfill names not
- *   present in the array will be excluded from the final bundle.
+ *   included in the bundle. Valid values are "Array.from" and "DOMException" (names are
+ *   case-insensitive). Any polyfill names not present in the array will be excluded from the final
+ *   bundle.
  * 
  * If this is a boolean, then a value of true (the default value) means that all optional polyfills
  *   are included in the output bundle, while false means that none of them are included.

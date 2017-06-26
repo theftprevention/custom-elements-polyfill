@@ -73,10 +73,30 @@ if (document.readyState === 'loading') {
     onDocumentReady();
 }
 
-require('./spec-window');
-require('./spec-CustomElementRegistry');
-require('./spec-CustomElementRegistry-define');
-require('./spec-CustomElementRegistry-get');
-require('./spec-CustomElementRegistry-whenDefined');
+try {
+
+    require('../lib/browser/index.js');
+
+    try {
+        require('./spec-window');
+        require('./spec-CustomElementRegistry');
+        require('./spec-CustomElementRegistry-define');
+        require('./spec-CustomElementRegistry-get');
+        require('./spec-CustomElementRegistry-whenDefined');
+    } catch (error) {
+        describe('Tests', function () {
+            it('failed to load', function () {
+                throw error;
+            });
+        });
+    }
+
+} catch (error) {
+    describe('Polyfill', function () {
+        it('failed to load', function () {
+            throw error;
+        });
+    });
+}
 
 runTests();
