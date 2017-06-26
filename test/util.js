@@ -1,9 +1,9 @@
 'use strict';
 
 require('expect.js')
-require('../lib/browser/other-polyfills/Object.getOwnPropertyDescriptors');
 
 var builtInElements = require('../lib/browser/built-in-elements'),
+    concat,
     container = document.getElementById('test-container'),
     definitions = {},
     domExCodes = {
@@ -29,6 +29,10 @@ var builtInElements = require('../lib/browser/built-in-elements'),
         InvalidNodeTypeError: 24,
         DataCloneError: 25
     },
+    getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
+    getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors,
+    getOwnPropertyNames = Object.getOwnPropertyNames,
+    getOwnPropertySymbols = Object.getOwnPropertySymbols || function () { return []; },
     invalidTagNames = [
         'div',
         'hello',
@@ -63,6 +67,25 @@ var builtInElements = require('../lib/browser/built-in-elements'),
         'hello-world',
         '\ud83d\udca9-\ud83d\udca9'
     ];
+
+if (!getOwnPropertyDescriptors) {
+    concat = Array.prototype.concat;
+    getOwnPropertyDescriptors = function getOwnPropertyDescriptors(O) {
+        var keys = concat.call(getOwnPropertyNames(O), getOwnPropertySymbols(O)),
+            i = 0,
+            l = keys.length,
+            result = {},
+            key, descriptor;
+        while (i < l) {
+            key = keys[i++];
+            descriptor = getOwnPropertyDescriptor(O, key);
+            if (descriptor) {
+                result[key] = descriptor;
+            }
+        }
+        return result;
+    };
+}
 
 /**
  * @typedef {object} TestDefinitionOptions

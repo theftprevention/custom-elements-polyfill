@@ -646,11 +646,6 @@ Object.defineProperties(ClassProxy.prototype, {
         value: null,
         writable: true
     },
-    prototype: {
-        enumerable: true,
-        value: null,
-        writable: true
-    },
     wasFunction: {
         enumerable: true,
         value: false,
