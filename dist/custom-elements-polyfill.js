@@ -2520,7 +2520,7 @@ module.exports = (function () {
 
     DOMException = function DOMException(message, name) {
         var code, err;
-        if (!(this instanceof DOMException) || props.has(this)) {
+        if (!(this instanceof DOMException) || (props && props.has(this))) {
             throw new TypeError(constructorError);
         }
         if (nativePrototype && getters) {
