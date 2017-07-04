@@ -91,7 +91,7 @@ function checkJobs(test) {
         if (i === 0) {
             console.log('All jobs completed.');
             console.log();
-            resolve(jobs);
+            test.resolve(jobs);
         } else {
             console.log(i + ' job' + (i === 1 ? ' is' : 's are') + ' still in progress.');
             console.log();
