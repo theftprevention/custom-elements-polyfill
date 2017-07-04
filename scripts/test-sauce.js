@@ -7,6 +7,7 @@ const
  * @property {number} checkCount
  * @property {number} checkInterval
  * @property {Array.<string>} completedJobs
+ * @property {object} options
  * @property {Promise} promise
  * @property {function} reject
  * @property {function} resolve
@@ -54,7 +55,7 @@ function checkJobs(test) {
 
     test.checkCount++;
 
-    sauce.send({
+    test.sauce.send({
         method: 'POST',
         path: ':username/js-tests/status',
         data: {
@@ -73,11 +74,14 @@ function checkJobs(test) {
             response = JSON.parse(responseData);
             jobs = response && response['js tests'];
             if (!Array.isArray(jobs)) {
-                console.log('Failed to parse response: POST ' + sauceApiUrl + ':username/js-tests/status');
-                console.log('  => ' + responseData);
                 throw new Error('Could not parse API response.');
             }
         } catch (ex) {
+            console.log();
+            console.error(ex);
+            console.log();
+            console.log('POST ' + sauceApiUrl + ':username/js-tests/status');
+            console.log('  => ' + responseData);
             return test.reject(ex);
         }
 
@@ -124,6 +128,7 @@ function runSauceTests(options) {
         checkCount: 0,
         checkInterval: 10000,
         completedJobs: [],
+        options: options,
         promise: promise,
         reject: reject,
         resolve: resolve,
@@ -147,16 +152,17 @@ function runSauceTests(options) {
             response = JSON.parse(responseData);
             jobs = response && response['js tests'];
             if (!Array.isArray(jobs)) {
-                console.log('Failed to parse response: POST ' + sauceApiUrl + ':username/js-tests');
-                console.log('  => ' + responseData);
                 throw new Error('Could not parse API response.');
             }
             if (jobs.length === 0) {
-                console.log('Response returned an empty job list: POST ' + sauceApiUrl + ':username/js-tests');
-                console.log('  => ' + responseData);
                 throw new Error('The API response returned an empty job list.');
             }
         } catch (ex) {
+            console.log();
+            console.error(ex);
+            console.log();
+            console.log('POST ' + sauceApiUrl + ':username/js-tests');
+            console.log('  => ' + responseData);
             return reject(ex);
         }
 
