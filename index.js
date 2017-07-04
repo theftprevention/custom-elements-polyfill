@@ -4,10 +4,11 @@ const
     Browserify = require('browserify'),
     fs = require('fs'),
     path = require('path'),
-    pathTo = require('./lib/path-to'),
     through = require('through2'),
 
-    browserEntry = pathTo('lib/browser/index.js'),
+    root = __dirname,
+
+    browserEntry = path.join(root, 'browser.js'),
     func = 'function',
     getOwnPropertyNames = Object.getOwnPropertyNames,
     hasOwnProperty = (function () {
@@ -17,7 +18,7 @@ const
         };
     })(),
     isArray = Array.isArray,
-    pkg = JSON.parse(fs.readFileSync(pathTo('package.json'), 'utf8')),
+    pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')),
     reg_version = /\{VERSION_PLACEHOLDER\}/g,
     toLower = (function () {
         var S = String,
@@ -29,8 +30,8 @@ const
     version = pkg.version,
 
     polyfillMap = {
-        'Array.from': pathTo('lib/browser/other-polyfills/Array.from.js'),
-        'DOMException': pathTo('lib/browser/other-polyfills/DOMException.js')
+        'Array.from': path.join(root, 'lib/other-polyfills/Array.from.js'),
+        'DOMException': path.join(root, 'lib/other-polyfills/DOMException.js')
     },
     polyfillNames = getOwnPropertyNames(polyfillMap);
 
@@ -124,6 +125,6 @@ module.exports = {
 
         return browserify;
     },
-    isValidCustomElementName: require('./lib/browser/is-valid-custom-element-name'),
+    isValidCustomElementName: require('./lib/is-valid-custom-element-name'),
     version: version
 };

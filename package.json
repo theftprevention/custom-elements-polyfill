@@ -22,23 +22,26 @@
   },
   "devDependencies": {
     "es6-promise-polyfill": "^1.2.0",
+    "eslint": "^4.1.1",
     "expect.js": "^0.3.1",
     "mocha": "^3.4.2",
+    "module-deps": "^4.0.8",
     "saucelabs": "^1.4.0",
-    "selenium-webdriver": "^3.4.0",
     "uglify-js": "^3.0.11"
   },
   "scripts": {
     "build": "node scripts/build-polyfill.js",
     "test": "node scripts/test-sauce.js"
   },
+  "main": "index.js",
   "files": [
     "dist",
     "lib",
+    "browser.js",
     "index.js",
     "LICENSE"
   ],
   "browser": {
-    "./index.js": "./lib/browser/index.js"
+    "./index.js": "./browser.js"
   }
 }

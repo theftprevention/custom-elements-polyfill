@@ -1,7 +1,8 @@
-/// <reference path="../node_modules/expect.js/index.js" />
-/// <reference path="../node_modules/mocha/mocha.js" />
-
 'use strict';
+
+require('mocha');
+
+var expect = require('expect.js');
 
 describe('The global (window) object', function () {
     describe('\'CustomElementRegistry\' property', function () {

@@ -1,4473 +1,6 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
-'use strict';
-
-var common = require('./common'),
-    conformance = require('./conformance'),
-    CustomElementDefinition = require('./custom-element-definition'),
-    CustomElementProperties = require('./custom-element-properties'),
-    reactions = require('./reactions'),
-    
-    DOMException = window.DOMException,
-    getPrototypeOf = Object.getPrototypeOf,
-    setPrototypeOf = Object.setPrototypeOf,
-    TypeError = window.TypeError;
-
-/**
- * This is the base constructor for all custom elements, and fulfills the steps of the
- *   HTML Standard "HTML element constructor" algorithm for all derived custom element
- *   types.
- * 
- * @param {function} activeFunction - The base interface from which the custom element
- *   being created is derived. For example, if the custom element being created is a
- *   customized built-in element that extends the "button" tag, then this parameter is
- *   a reference to window.HTMLButtonElement. If the custom element being created is an
- *   autonomous custom element, then this parameter is a reference to window.HTMLElement.
- * 
- * @returns {HTMLElement} The constructed custom element, after all remaining
- *   constructors have been run.
- */
-module.exports = function baseElementConstructor(activeFunction) {
-    var thisPrototype = this == null ? null : getPrototypeOf(this),
-        definition = thisPrototype ? CustomElementDefinition.fromPrototype(thisPrototype) : null,
-        element, prototype, props, i;
-
-    // HTML Standard: "HTML element constructor" algorithm
-    // https://html.spec.whatwg.org/#html-element-constructors
-
-    // 1.   Let `registry` be the current global object's CustomElementRegistry object.
-    // 2.   If NewTarget is equal to the active function object, then throw a TypeError and
-    //      abort these steps.
-
-    // 3.   Let `definition` be the entry in `registry` with constructor equal to NewTarget.
-    //      If there is no such definition, then throw a TypeError and abort these steps.
-    if (!definition) {
-        throw new TypeError(common.illegalConstructor);
-    }
-
-    // 4.   If `definition`'s local name is equal to `definition`'s name (i.e., `definition`
-    //      is for an autonomous custom element), then:
-    //
-    // 4.1.     If the active function object is not HTMLElement, then throw a TypeError
-    //          and abort these steps.
-    //
-    // 5.   Otherwise (i.e., if definition is for a customized built-in element):
-    //
-    // 5.1.     Let `valid local names` be the list of local names for elements defined
-    //          in this specification or in other applicable specifications that use the
-    //          active function object as their element interface.
-    //
-    // 5.2.     If `valid local names` does not contain `definition`'s local name, then
-    //          throw a TypeError and abort these steps.
-    if (activeFunction !== definition.baseInterface) {
-        throw new TypeError(common.illegalConstructor);
-    }
-
-    // 6.   Let `prototype` be `definition`'s prototype.
-    prototype = definition.prototype;
-
-    // 7.   If `definition`'s construction stack is empty, then:
-    if (definition.constructionStack.length === 0) {
-
-        // 7.1.     Let `element` be a new element that implements the interface to which the
-        //          active function object corresponds, with no attributes, namespace set to
-        //          the HTML namespace, local name set to `definition`'s local name, and node
-        //          document set to the current global object's associated Document.
-        element = definition.createElement(document);
-        props = new CustomElementProperties(element, definition);
-
-        if (common.nextElementIsSynchronous) {
-            common.nextElementIsSynchronous = false;
-            props.synchronous = true;
-            conformance.beginCheck(props);
-        }
-
-        // 7.2.     Perform `element`.[[SetPrototypeOf]](`prototype`). Rethrow any exceptions.
-        setPrototypeOf(element, prototype);
-
-        reactions.observeElement(props.element);
-
-        // 7.3.     Set `element`'s custom element state to "custom".
-        // 7.4.     Set `element`'s custom element definition to `definition`.
-        definition.finalizeElement(element);
-
-        // 7.5.     Return `element`.
-        return element;
-    }
-
-    // 8.   Let `element` be the last entry in `definition`'s construction stack.
-    i = definition.constructionStack.length - 1;
-    props = definition.constructionStack[i];
-    element = props.element;
-
-    // 9.   If `element` is an already constructed marker, then throw an "InvalidStateError"
-    //      DOMException and abort these steps.
-    if (element === common.alreadyConstructedMarker) {
-        throw new DOMException("Failed to construct 'CustomElement': Cannot create custom element <" + definition.name + (definition.isBuiltIn ? ' is="' + definition.localName + '"' : '') + "> from within its own custom element constructor.", 'InvalidStateError');
-    }
-
-    if (common.nextElementIsSynchronous) {
-        common.nextElementIsSynchronous = false;
-        props.synchronous = true;
-        conformance.beginCheck(props);
-    }
-
-    // 10.  Perform `element`.[[SetPrototypeOf]](`prototype`). Rethrow any exceptions.
-    setPrototypeOf(element, prototype);
-
-    reactions.observeElement(props.element);
-
-    // 11.  Replace the last entry in `definition`'s construction stack with an
-    //      already constructed marker.
-    definition.constructionStack[i] = common.alreadyConstructedMarker;
-
-    // 12.  Return `element`.
-    return element;
-}
-
-},{"./common":4,"./conformance":5,"./custom-element-definition":7,"./custom-element-properties":8,"./reactions":16}],2:[function(require,module,exports){
-'use strict';
-
-var common = require('./common'),
-
-    allTagNames,
-    constructorsByInterfaceName = {},
-    constructorsByTagName = {},
-    document = window.document,
-    Document_createElement = Document.prototype.createElement,
-    getOwnPropertyNames = Object.getOwnPropertyNames,
-    hasOwnProperty = common.hasOwnProperty,
-    HTMLElement = window.HTMLElement,
-    HTMLElementProto = HTMLElement.prototype,
-    interfaceNames,
-    interfaces = [],
-    isPrototypeOf = common.isPrototypeOf,
-    // 'predefinedTagNames' is an object where each key is the name of a native HTML element
-    // interface and each value is a string or an array of strings, each of which is the
-    // localName of an element that is known to implement that interface.
-    // 
-    // An empty array signifies that there are no tag names associated with the interface,
-    // meaning it will not be included in the mapping. This is generally done for interfaces
-    // that are deprecated, obsolete, or abstract.
-    predefinedTagNames = {
-        HTMLAnchorElement: ['a'],
-        HTMLDListElement: ['dl'],
-        HTMLDirectoryElement: ['dir'],
-        HTMLHeadingElement: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
-        HTMLKeygenElement: [], // deprecated
-        HTMLModElement: ['del', 'ins'],
-        HTMLOListElement: ['ol'],
-        HTMLParagraphElement: ['p'],
-        HTMLQuoteElement: ['blockquote'],
-        HTMLTableCaptionElement: ['caption'],
-        HTMLTableCellElement: ['td', 'th'],
-        HTMLTableColElement: ['col'],
-        HTMLTableRowElement: ['tr'],
-        HTMLTableSectionElement: ['tbody', 'tfoot', 'thead'],
-        HTMLUListElement: ['ul'],
-        HTMLUnknownElement: [] // abstract
-    },
-    props = getOwnPropertyNames(window),
-    prototypes = [],
-    reg_htmlInterface = /^HTML(.+)Element$/,
-    toLower = (function () {
-        var S = String,
-            t = S.prototype.toLowerCase;
-        return function toLower(string) {
-            return t.call(S(string));
-        };
-    })(),
-
-    i = 0,
-    l = props.length,
-    n = 1,
-    name, match, interf, tagNames, isPredefined, element, t, tagName;
-
-/**
- * @param {string} interfaceName
- * @returns {?function}
- */
-function constructorFromInterfaceName(interfaceName) {
-    return constructorsByInterfaceName[interfaceName] || null;
-}
-
-/**
- * @param {object} prototype
- * @returns {?function}
- */
-function constructorFromPrototype(prototype) {
-    var i = prototypes.length;
-    while (i--) {
-        if (prototype === prototypes[i]) {
-            return interfaces[i];
-        }
-    }
-    return null;
-}
-
-/**
- * @param {string} tagName
- * @returns {?function}
- */
-function constructorFromTagName(tagName) {
-    return constructorsByTagName[tagName] || null;
-}
-
-/**
- * @param {function} constructor
- * @returns {boolean}
- */
-function isElementInterface(constructor) {
-    var i = interfaces.length;
-    while (i--) {
-        if (constructor === interfaces[i]) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * @param {object} proto
- * @returns {boolean}
- */
-function isElementPrototype(proto) {
-    var i = prototypes.length;
-    while (i--) {
-        if (proto === prototypes[i]) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * @param {string} tagName
- * @returns {boolean}
- */
-function isKnownTagName(tagName) {
-    return hasOwnProperty(constructorsByTagName, tagName);
-}
-
-interfaces[0] = HTMLElement;
-prototypes[0] = HTMLElementProto;
-
-while (i < l) {
-    name = props[i++];
-    match = reg_htmlInterface.exec(name);
-    interf = match == null ? null : window[name];
-    if (interf && interf.prototype && isPrototypeOf(HTMLElementProto, interf.prototype)) {
-        constructorsByInterfaceName[name] = interf;
-        interfaces[n++] = interf;
-        prototypes[n] = interf.prototype;
-        isPredefined = hasOwnProperty(predefinedTagNames, name);
-        if (isPredefined) {
-            tagNames = predefinedTagNames[name];
-        } else {
-            tagNames = [toLower(match[1])];
-        }
-        t = tagNames.length;
-        if (isPredefined) {
-            while (t--) {
-                constructorsByTagName[tagNames[t]] = interf;
-            }
-        } else {
-            while (t--) {
-                tagName = tagNames[t];
-                element = Document_createElement.call(document, tagName);
-                if (element instanceof interf) {
-                    constructorsByTagName[tagName] = interf;
-                }
-            }
-        }
-    }
-}
-
-allTagNames = getOwnPropertyNames(constructorsByTagName);
-interfaceNames = getOwnPropertyNames(constructorsByInterfaceName);
-
-module.exports = {
-    constructorFromInterfaceName: constructorFromInterfaceName,
-    constructorFromPrototype: constructorFromPrototype,
-    constructorFromTagName: constructorFromTagName,
-    interfaceNames: interfaceNames,
-    isElementInterface: isElementInterface,
-    isElementPrototype: isElementPrototype,
-    isKnownTagName: isKnownTagName,
-    tagNames: allTagNames
-};
-
-},{"./common":4}],3:[function(require,module,exports){
-'use strict';
-
-var common = require('./common'),
-    PrivatePropertyStore = require('./private-property-store'),
-
-    arrayFrom = Array.from,
-    copyProperties = common.copyProperties,
-    Function_toString = Function.prototype.toString,
-    getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
-    getPrototypeOf = Object.getPrototypeOf,
-    globalEval = window.eval,
-    hasOwnProperty = common.hasOwnProperty,
-    ObjectProto = Object.prototype,
-    Object_create = Object.create,
-    Object_toString = ObjectProto.toString,
-    proxies = new PrivatePropertyStore('ClassProxy'),
-    reg_ctorName = /^\s*(?:class|function)\s+([^\s\{\(]+)/,
-    reg_objName = /^\[object (.+)\]$/,
-    String = window.String,
-    supportsClasses = (function () {
-        try {
-            globalEval('(function(){return class A{};})()');
-            return true;
-        } catch (ex) {
-            return false;
-        }
-    })(),
-    toStringTag = window.Symbol && typeof window.Symbol.toStringTag === 'symbol' ? window.Symbol.toStringTag : null;
-
-/**
- * Creates a new ClassProxy.
- * 
- * @class ClassProxy
- * @classdesc Represents a function that is rewritten as an ES6 class.
- * 
- * @param {function} constructor
- * @param {function} [finalConstructor]
- * 
- * @property {function} finalConstructor - The final proxied constructor, appropriate for
- *   use with the 'new' keyword.
- * @property {boolean} isClass - Whether or not the finalConstructor is part of a "class"
- *   declaration.
- * @property {boolean} isElementInterface - Whether or not the current ClassProxy
- *   represents a built-in HTML element interface that has been patched for use as a base
- *   class.
- * @property {function} originalConstructor - The original constructor.
- * @property {boolean} wasFunction - Whether or not the originalConstructor is a function
- *   (and not an ES6 class).
- */
-function ClassProxy(constructor, finalConstructor) {
-
-    var prototype = (finalConstructor || constructor).prototype,
-        baseConstructor, basePrototype, initializer, source;
-
-    this.originalConstructor = constructor;
-    this.wasFunction = !isClass(constructor);
-
-    proxies.set(constructor, this);
-    proxies.set(prototype, this);
-
-    if (finalConstructor) {
-        this.finalConstructor = finalConstructor;
-        if (constructor !== finalConstructor) {
-            this.isElementInterface = true;
-            this.finalConstructor.prototype = prototype;
-            this.isClass = false;
-            proxies.set(finalConstructor, this);
-        } else {
-            this.isClass = supportsClasses;
-        }
-        return this;
-    } else if (!this.wasFunction) {
-        this.isClass = true;
-        return this;
-    }
-
-    this.isClass = supportsClasses;
-    basePrototype = getPrototypeOf(prototype);
-    
-    if (basePrototype != null && basePrototype !== ObjectProto) {
-        this.baseProxy = proxies.get(basePrototype);
-        if (!this.baseProxy) {
-            baseConstructor = basePrototype.constructor;
-            if (typeof baseConstructor !== 'function' || baseConstructor.prototype !== basePrototype) {
-                baseConstructor = function () { };
-                baseConstructor.prototype = basePrototype;
-            }
-            this.baseProxy = new ClassProxy(baseConstructor);
-        }
-        baseConstructor = this.baseProxy.finalConstructor;
-    } else if (this.isClass) {
-        baseConstructor = constructor;
-        basePrototype = baseConstructor.prototype;
-    } else {
-        basePrototype = Object_create(prototype);
-    }
-
-    if (!this.isClass && this.baseProxy && this.baseProxy.isElementInterface) {
-        initializer = initElementSubclass.bind(null, constructor, this.baseProxy.finalConstructor);
-    } else {
-        initializer = initDefault.bind(null, constructor);
-    }
-
-    if (this.isClass) {
-        source = '(function(){return function(init,base){return class extends base{constructor(){super();init(this,arguments);}};};})();';
-        this.finalConstructor = globalEval(source)(initializer, baseConstructor);
-    } else {
-        this.finalConstructor = (function (init) {
-            return function () { return init(this, arguments); };
-        })(initializer);
-        this.finalConstructor.prototype = this.baseProxy ? Object_create(basePrototype) : prototype;
-        this.finalConstructor.prototype.constructor = constructor;
-    }
-
-    proxies.set(this.finalConstructor, this);
-
-    constructor.prototype = this.finalConstructor.prototype;
-    constructor.prototype.constructor = this.originalConstructor;
-    copyProperties(constructor, this.finalConstructor);
-
-    if (this.baseProxy) {
-        copyProperties(prototype, this.finalConstructor.prototype);
-        proxies.set(this.finalConstructor.prototype, this);
-    }
-}
-
-Object.defineProperties(ClassProxy.prototype, {
-    constructor: {
-        value: ClassProxy
-    },
-
-    baseProxy: {
-        enumerable: true,
-        value: null,
-        writable: true
-    },
-    finalConstructor: {
-        enumerable: true,
-        value: null,
-        writable: true
-    },
-    isClass: {
-        enumerable: true,
-        value: false,
-        writable: true
-    },
-    isElementInterface: {
-        enumerable: true,
-        value: false,
-        writable: true
-    },
-    originalConstructor: {
-        enumerable: true,
-        value: null,
-        writable: true
-    },
-    wasFunction: {
-        enumerable: true,
-        value: false,
-        writable: true
-    }
-});
-
-/**
- * @param {function} constructor
- * @param {*} thisArg
- * @param {Array} args
- * @returns {object}
- */
-function initDefault(constructor, thisArg, args) {
-    constructor.apply(thisArg, arrayFrom(args));
-    return thisArg;
-}
-
-/**
- * @param {function} constructor
- * @param {function} preConstructor
- * @param {*} thisArg
- * @param {Array} args
- * @returns {object}
- */
-function initElementSubclass(constructor, preConstructor, thisArg, args) {
-    var result = preConstructor.call(thisArg);
-    constructor.apply(result, arrayFrom(args));
-    return result;
-}
-
-/**
- * @param {object} target
- * @returns {string}
- */
-function getClassName(target) {
-    var constructor, proto, name, match;
-    if (!(target instanceof Object)) {
-        return null;
-    }
-
-    if (typeof target === 'function') {
-        constructor = target;
-        proto = target.prototype;
-        target = null;
-        if (!(proto instanceof Object)) {
-            return null;
-        }
-    } else {
-        if (toStringTag && hasOwnProperty(target, toStringTag)) {
-            name = String(target[toStringTag] || '');
-            if (name) {
-                return name;
-            }
-        }
-        proto = getPrototypeOf(target);
-        if (!proto || proto === ObjectProto) {
-            return 'Object';
-        }
-        constructor = typeof target.constructor === 'function' ? target.constructor : null;
-        if (constructor && target === constructor.prototype) {
-            target = null;
-        }
-    }
-
-    if (toStringTag && proto && hasOwnProperty(proto, toStringTag)) {
-        name = String(proto[toStringTag] || '');
-        if (name) {
-            return name;
-        }
-    }
-    if (constructor) {
-        name = String(constructor.name || '');
-        if (name) {
-            return name;
-        }
-        match = reg_ctorName.exec(Function_toString.call(constructor));
-        name = match && match[1];
-        if (name) {
-            return name;
-        }
-    }
-    match = reg_objName.exec(Object_toString.call(target));
-    return (match && match[1]) || null;
-}
-
-/**
- * Returns true if the parameter is a function, and was defined using ES6 class
- * syntax; otherwise, returns false.
- * 
- * @param {function} fn
- * @returns {boolean}
- */
-function isClass(fn) {
-    var protoDescriptor;
-    if (!supportsClasses || typeof fn !== 'function') {
-        return false;
-    }
-
-    // The test to determine whether a function is a class constructor is surprisingly
-    // easy: for regular functions, the 'prototype' property is writable. For class
-    // constructors, it is not.
-
-    protoDescriptor = getOwnPropertyDescriptor(fn, 'prototype');
-    return protoDescriptor ? !protoDescriptor.writable : false;
-}
-
-/**
- * @param {function} constructor
- * @param {function} [finalConstructor]
- * @returns {function}
- */
-function proxy(constructor, finalConstructor) {
-    var proxy = proxies.get(constructor);
-    if (proxy) {
-        return proxy.finalConstructor;
-    }
-    if (typeof constructor !== 'function' || !(constructor.prototype instanceof Object)) {
-        return constructor;
-    }
-    return new ClassProxy(constructor, finalConstructor).finalConstructor;
-}
-
-module.exports = {
-    getClassName: getClassName,
-    isClass: isClass,
-    proxy: proxy,
-    supported: supportsClasses
-};
-
-},{"./common":4,"./private-property-store":15}],4:[function(require,module,exports){
-'use strict';
-
-require('./private-property-store');
-
-var concat,
-    defineProperties = Object.defineProperties,
-    getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
-    getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors,
-    getOwnPropertyNames = Object.getOwnPropertyNames,
-    getOwnPropertySymbols = Object.getOwnPropertySymbols || function () { return []; },
-    hOP = Object.prototype.hasOwnProperty,
-    iPO = Object.prototype.isPrototypeOf,
-
-    abs = Math.abs,
-    alreadyConstructedMarker = {},
-    document = window.document,
-    Document_get_readyState = getOwnPropertyDescriptor(window.Document.prototype, 'readyState').get,
-    floor = Math.floor,
-    isFinite = window.isFinite,
-    isNaN = window.isNaN,
-    mainDocumentReady = false,
-    max = Math.max,
-    maxSafeInteger = Math.pow(2, 53) - 1,
-    min = Math.min,
-    /**
-     * Indicates whether the synchronous custom elements flag should be set for
-     * the next custom element to be created.
-     * @type {boolean}
-     */
-    nextElementIsSynchronous = false,
-    Number = window.Number,
-    shimStack = 0;
-
-if (!getOwnPropertyDescriptors) {
-    concat = Array.prototype.concat;
-    getOwnPropertyDescriptors = function getOwnPropertyDescriptors(O) {
-        var keys = concat.call(getOwnPropertyNames(O), getOwnPropertySymbols(O)),
-            i = 0,
-            l = keys.length,
-            result = {},
-            key, descriptor;
-        while (i < l) {
-            key = keys[i++];
-            descriptor = getOwnPropertyDescriptor(O, key);
-            if (descriptor) {
-                result[key] = descriptor;
-            }
-        }
-        return result;
-    };
-    Object.defineProperty(Object, 'getOwnPropertyDescriptors', {
-        configurable: true,
-        value: getOwnPropertyDescriptors,
-        writable: true
-    });
-}
-
-/**
- * @private
- * @param {object} value
- * @returns {number}
- */
-function toLength(value) {
-    var len = Number(value);
-    if (isNaN(len)) {
-        return 0;
-    }
-    if (len === 0 || !isFinite(len)) {
-        return len;
-    }
-    len = (len > 0 ? 1 : -1) * floor(abs(len));
-    return min(max(len, 0), maxSafeInteger);
-}
-
-/**
- * Determines whether an array contains a specific value.
- * 
- * @param {Array} array - The array or array-like object to search.
- * @param {object} value - The value to search for in the array.
- * 
- * @returns {boolean}
- */
-function arrayContains(array, value) {
-    var i;
-    if (array == null) {
-        return false;
-    }
-    i = toLength(array.length);
-    while (i--) {
-        if (array[i] === value) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * @param {object} from
- * @param {object} to
- * @returns {object}
- */
-function copyProperties(from, to) {
-    var toDescriptors = {},
-        fromDescriptors = getOwnPropertyDescriptors(from),
-        hasOwn, toDescriptor;
-    for (var name in fromDescriptors) {
-        if (name !== 'arguments' && name !== 'caller' && name !== 'length' && name !== 'prototype' && hasOwnProperty(fromDescriptors, name)) {
-            hasOwn = hasOwnProperty(to, name);
-            toDescriptor = hasOwn ? getOwnPropertyDescriptor(to, name) : null;
-            if (!toDescriptor || toDescriptor.configurable) {
-                toDescriptors[name] = fromDescriptors[name];
-            } else if (toDescriptor.writable) {
-                to[name] = from[name];
-            }
-        }
-    }
-    return defineProperties(to, toDescriptors);
-}
-
-/**
- * @param {object} O
- * @param {string} p
- * @returns {string}
- */
-function hasOwnProperty(O, p) {
-    return hOP.call(O, p);
-}
-
-/**
- * @param {Document} doc
- * @returns {boolean}
- */
-function isDocumentReady(doc) {
-    if (doc === document && !mainDocumentReady) {
-        return false;
-    }
-    return (Document_get_readyState.call(doc) !== 'loading');
-}
-
-/**
- * @param {object} proto
- * @param {object} O
- * @returns {boolean}
- */
-function isPrototypeOf(proto, O) {
-    return iPO.call(proto, O);
-}
-
-module.exports = defineProperties({}, {
-    alreadyConstructedMarker: {
-        value: alreadyConstructedMarker
-    },
-    arrayContains: {
-        value: arrayContains
-    },
-    callbackNames: {
-        value: {
-            adopted: 'adoptedCallback',
-            attributeChanged: 'attributeChangedCallback',
-            connected: 'connectedCallback',
-            disconnected: 'disconnectedCallback',
-
-            all: ['adoptedCallback', 'attributeChangedCallback', 'connectedCallback', 'disconnectedCallback']
-        }
-    },
-    conformanceStatus: {
-        value: {
-            NONE: 0,
-            STARTED: 1,
-            CANCELED: 2,
-            FAILED: 3,
-            PASSED: 4
-        }
-    },
-    copyProperties: {
-        value: copyProperties
-    },
-    decrementShimStack: {
-        value: function () {
-            shimStack--;
-        }
-    },
-    hasOwnProperty: {
-        value: hasOwnProperty
-    },
-    htmlNamespace: {
-        value: 'http://www.w3.org/1999/xhtml'
-    },
-    illegalConstructor: {
-        value: 'Illegal constructor'
-    },
-    illegalInvocation: {
-        value: 'Illegal invocation'
-    },
-    incrementShimStack: {
-        value: function () {
-            shimStack++;
-        }
-    },
-    isDocumentReady: {
-        value: isDocumentReady
-    },
-    isPrototypeOf: {
-        value: isPrototypeOf
-    },
-    mainDocumentReady: {
-        get: function () {
-            return mainDocumentReady;
-        },
-        set: function (value) {
-            mainDocumentReady = !!value;
-        }
-    },
-    nextElementIsSynchronous: {
-        get: function () {
-            return nextElementIsSynchronous;
-        },
-        set: function (value) {
-            nextElementIsSynchronous = !!value;
-        }
-    },
-    states: {
-        value: {
-            /**
-             * Indicates an autonomous custom element or customized built-in element
-             * which has been successfully constructed or upgraded in accordance with
-             * its custom element definition.
-             */
-            custom: 'custom',
-            /**
-             * Indicates an autonomous custom element or customized built-in element
-             * which could not be constructed or upgraded because its custom element
-             * constructor threw an exception.
-             */
-            failed: 'failed',
-            /**
-             * Indicates a built-in element or HTMLUnknownElement, i.e. an element that
-             * is not (and cannot be) customized.
-             */
-            uncustomized: 'uncustomized',
-            /**
-             * Indicates an autonomous custom element or customized built-in element
-             * which has not yet been upgraded.
-             */
-            undefined: 'undefined'
-        }
-    },
-    throwAsync: {
-        value: function throwAsync(error) {
-            setTimeout(function () { throw this; }.bind(error));
-        }
-    },
-    usingReactionApi: {
-        get: function () {
-            return shimStack > 0;
-        }
-    }
-});
-
-},{"./private-property-store":15}],5:[function(require,module,exports){
-'use strict';
-
-var common = require('./common'),
-    CustomElementProperties = require('./custom-element-properties'),
-
-    getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
-    hasOwnProperty = common.hasOwnProperty,
-
-    ElementProto = window.Element.prototype,
-    HTMLElement = window.HTMLElement,
-    NodeProto = window.Node.prototype,
-
-    Element_removeAttributeNode = ElementProto.removeAttributeNode,
-    Element_setAttributeNodeNS = ElementProto.setAttributeNodeNS,
-    Element_get_attributes = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'attributes') ? ElementProto : NodeProto, 'attributes').get,
-
-    Node_appendChild = NodeProto.appendChild,
-    Node_removeChild = NodeProto.removeChild,
-    Node_get_firstChild = getOwnPropertyDescriptor(NodeProto, 'firstChild').get,
-    
-    conformanceStatus = common.conformanceStatus,
-    DOMException = window.DOMException,
-    failedToConstruct = "Failed to construct 'CustomElement': ",
-    states = common.states,
-    TypeError = window.TypeError;
-
-/**
- * @param {CustomElementProperties} props
- * @private
- */
-function beginConformanceCheck(props) {
-    var element = props.element,
-        originalAttributes = [],
-        originalChildNodes = [],
-        attrs = Element_get_attributes.call(element),
-        i, attr, child;
-
-    props.conformanceCheck = conformanceStatus.STARTED;
-    props.originalAttributes = originalAttributes;
-    props.originalChildNodes = originalChildNodes;
-    props.originalDocument = props.ownerDocument;
-
-    common.reactionsEnabled = false;
-
-    i = 0;
-    while (attr = attrs[0]) {
-        originalAttributes[i++] = Element_removeAttributeNode.call(element, attr);
-    }
-    i = 0;
-    while (child = Node_get_firstChild.call(element)) {
-        originalChildNodes[i++] = Node_removeChild.call(element, child);
-    }
-
-    common.reactionsEnabled = true;
-}
-/**
- * @param {CustomElementProperties} props
- * @private
- */
-function disposeConformanceProperties(props) {
-    var element = props.element,
-        attrs, children, i, l, attr, child;
-
-    if (element && (props.originalAttributes || props.originalChildNodes)) {
-
-        common.reactionsEnabled = false;
-
-        if (props.originalAttributes) {
-            // Remove any attributes that were non-conformantly added during the constructor
-            attrs = Element_get_attributes.call(element);
-            while (attr = attrs[0]) {
-                Element_removeAttributeNode.call(element, attr);
-            }
-            // Restore the original attributes
-            attrs = props.originalAttributes;
-            i = 0;
-            l = attrs.length;
-            while (i < l) {
-                Element_setAttributeNodeNS.call(element, attrs[i++]);
-            }
-        }
-
-        if (props.originalChildNodes) {
-            // Remove any child nodes that were non-conformantly added during the constructor
-            while (child = Node_get_firstChild.call(element)) {
-                Node_removeChild.call(element, child);
-            }
-            // Restore the original child nodes
-            children = props.originalChildNodes;
-            i = 0;
-            l = children.length;
-            while (i < l) {
-                Node_appendChild.call(element, children[i++]);
-            }
-        }
-
-        common.reactionsEnabled = true;
-    }
-
-    props.originalAttributes = null;
-    props.originalChildList = null;
-    props.originalDocument = null;
-}
-/**
- * @param {CustomElementProperties} props
- * @private
- */
-function evaluateConformance(props) {
-    var element, error, definition;
-
-    // If the custom element has a custom element state that is not 'undefined', then
-    // cancel the conformance check and return immediately.
-    if (props.state !== states.custom && props.state !== states.undefined) {
-        props.conformanceCheck = conformanceStatus.CANCELED;
-        return disposeConformanceProperties(props);
-    }
-
-    element = props.element;
-    error = null;
-    definition = props.definition;
-
-    // The remainder of this method executes steps 6.1.3 through 6.1.9 of the DOM Standard
-    // "create an element" algorithm.
-    // https://dom.spec.whatwg.org/#concept-create-element
-    // 
-    // Step 6.1.8 is intentionally skipped:
-    // 
-    //   6.1.8.  If `result`'s namespace is not the HTML namespace, then throw a NotSupportedError.
-    // 
-    // This check may someday be necessary in native browser implementations if the spec
-    // changes, but on the polyfill side, we know that every element implementing the
-    // HTMLElement interface belongs to the HTML namespace.
-
-    if (!(element instanceof HTMLElement)) {
-        //  6.1.3.  If `result` does not implement the HTMLElement interface, then throw a TypeError.
-        error = new TypeError(failedToConstruct + 'The resulting element must implement the HTMLElement interface.');
-    } else if (Element_get_attributes.call(element).length > 0) {
-        //  6.1.4.  If `result`'s attribute list is not empty, then throw a NotSupportedError.
-        error = new DOMException(failedToConstruct + 'The resulting element must not have any attributes.', 'NotSupportedError');
-    } else if (Node_get_firstChild.call(element) !== null) {
-        //  6.1.5.  If `result` has children, then throw a NotSupportedError.
-        error = new DOMException(failedToConstruct + 'The resulting element must not have any child nodes.', 'NotSupportedError');
-    } else if (props.parentNodeChanged && Node_get_parentNode.call(element) !== null) {
-        //  6.1.6.  If `result`'s parent is not null, then throw a NotSupportedError.
-        error = new DOMException(failedToConstruct + 'The resulting element must not have a parent node.', 'NotSupportedError');
-    } else if (Node_get_ownerDocument.call(element) !== props.originalDocument) {
-        //  6.1.7.  If `result`'s node document is not `document`, then throw a NotSupportedError.
-        error = new DOMException(failedToConstruct + 'The resulting element must belong to the same document for which it was created.', 'NotSupportedError');
-    } else if (Element_get_localName.call(element) !== definition.localName) {
-        //  6.1.9.  If `result`'s local name is not equal to `localName`, then throw a NotSupportedError.
-        error = new DOMException(failedToConstruct + "The resulting element's local name must match the local name specified by its custom element definition ('" + definition.localName + "').", 'NotSupportedError');
-    }
-
-    if (error) {
-        props.conformanceCheck = conformanceStatus.FAILED;
-        props.conformanceError = error;
-    } else {
-        props.conformanceCheck = conformanceStatus.PASSED;
-    }
-}
-
-module.exports = {
-    /**
-     * Begins watching the element represented by the given CustomElementProperties
-     *   to ensure that its custom element constructor behaves conformantly.
-     * 
-     * @param {CustomElementProperties} props - The CustomElementProperties of the
-     *   custom element whose constructor should be checked for conformance.
-     */
-    beginCheck: function beginCheck(props) {
-        props = CustomElementProperties.get(props);
-        if (props && props.conformanceCheck === conformanceStatus.NONE && (props.state === states.custom || props.state === states.undefined) && props.element) {
-            beginConformanceCheck(props);
-        }
-    },
-    /**
-     * Cancels the conformance check for the element represented by the given
-     *   CustomElementProperties, if one is currently in progress.
-     * 
-     * @param {CustomElementProperties} props - The CustomElementProperties of the
-     *   custom element whose conformance check should be canceled.
-     */
-    cancelCheck: function cancelCheck(props) {
-        props = CustomElementProperties.get(props);
-        if (props && props.conformanceCheck === conformanceStatus.STARTED) {
-            props.conformanceCheck = conformanceStatus.CANCELED;
-            disposeConformanceProperties(props);
-        }
-    },
-    /**
-     * Determines whether or not the custom element constructor behaved conformantly
-     *   when creating the element represented by the given CustomElementProperties.
-     * 
-     * @param {CustomElementProperties} props - The CustomElementProperties of the
-     *   custom element whose conformance result will be returned.
-     * 
-     * @returns {?DOMException|TypeError} An error explaining how the custom element
-     *   constructor behaved non-conformantly, or null if it behaved conformantly.
-     */
-    getError: function getError(props) {
-        props = CustomElementProperties.get(props);
-        if (!props) {
-            return null;
-        }
-        if (props.conformanceCheck === conformanceStatus.STARTED) {
-            evaluateConformance(props);
-            disposeConformanceProperties(props);
-        }
-        return props.conformanceError || null;
-    }
-};
-
-},{"./common":4,"./custom-element-properties":8}],6:[function(require,module,exports){
-'use strict';
-
-var common = require('./common'),
-    CustomElementDefinition = require('./custom-element-definition'),
-    CustomElementProperties = require('./custom-element-properties'),
-    isValidCustomElementName = require('./is-valid-custom-element-name'),
-    nativeCustomElements = require('./native-custom-elements'),
-    reactions = require('./reactions'),
-
-    arrayFrom = Array.from,
-    Element_setAttributeNS = window.Element.prototype.setAttributeNS,
-    HTML_NAMESPACE = common.htmlNamespace,
-    setPrototypeOf = Object.setPrototypeOf,
-    throwAsync = common.throwAsync;
-
-/**
- * @param {Document} document
- * @param {string} localName
- * @param {string} namespace
- * @param {?string} prefix
- * @param {?string} is
- * @param {boolean} synchronous
- * @param {?CustomElementDefinition} [definition]
- * @param {?function} [fallbackMethod]
- * @param {?object} [fallbackMethodThisArg]
- * @param {?Array} [fallbackMethodArgs]
- * @returns {HTMLElement}
- */
-module.exports = function createElement(document, localName, namespace, prefix, is, synchronous, definition, fallbackMethod, fallbackMethodThisArg, fallbackMethodArgs) {
-
-    var couldBeCustomElement = true,
-        result, props;
-
-    // Check for an existing definition in the native CustomElementRegistry.
-    // If one exists, then defer to the native Document.prototype.createElement or
-    // Document.prototype.createElementNS, as appropriate.
-    if (!definition && nativeCustomElements && namespace === HTML_NAMESPACE) {
-        couldBeCustomElement = is || isValidCustomElementName(localName);
-        if (couldBeCustomElement && nativeCustomElements.get(is || localName)) {
-            return fallbackMethod.apply(fallbackMethodThisArg, arrayFrom(fallbackMethodArgs));
-        }
-    }
-
-    // DOM Standard: "Create an element" algorithm
-    // https://dom.spec.whatwg.org/#concept-create-element
-
-    // To create an element, given a `document`, `localName`, `namespace`, and optional `prefix`,
-    // `is`, and synchronous custom elements flag, run these steps:
-
-    // 1.   If `prefix` was not given, let `prefix` be null.
-    prefix = typeof prefix === 'string' ? prefix : null;
-
-    // 2.   If `is` was not given, let `is` be null.
-    is = typeof is === 'string' ? is : null;
-
-    // 3.   Let `result` be null.
-    result = null;
-
-    // 4.   Let `definition` be the result of looking up a custom element definition given `document`,
-    //      `namespace`, `localName`, and `is`.
-    if (!definition && couldBeCustomElement) {
-        // Skip the definition lookup if we already determined that the "localName" and "is"
-        // values could not possibly map to a custom element.
-        definition = CustomElementDefinition.lookup(document, namespace, localName, is);
-    }
-
-    if (definition && definition.isBuiltIn) {
-
-        //  5.      If `definition` is non-null, and `definition`'s name is not equal to its local name (i.e.,
-        //          `definition` represents a customized built-in element), then:
-
-        //  5.1.    Let `interface` be the element interface for localName and the HTML namespace.
-        //  5.2.    Set `result` to a new element that implements `interface`, with no attributes, namespace
-        //          set to the HTML namespace, namespace prefix set to `prefix`, local name set to `localName`,
-        //          custom element state set to "undefined", custom element definition set to null, is value set
-        //          to `is`, and node document set to `document`.
-        result = definition.createElement(document);
-        props = new CustomElementProperties(result, definition);
-
-        if (synchronous) {
-            //  5.3.    If the synchronous custom elements flag is set, upgrade `result` using `definition`.
-            try {
-                reactions.upgradeElement(props, true);
-            } catch (ex) {
-                throwAsync(ex);
-            }
-        } else {
-            //  5.4.    Otherwise, enqueue a custom element upgrade reaction given `result` and `definition`.
-            reactions.enqueueUpgradeReaction(props);
-        }
-    } else if (definition) {
-
-        //  6.      Otherwise, if `definition` is non-null, then:
-        if (synchronous) {
-
-            //  6.1.    If the synchronous custom elements flag is set, then run these subsubsteps while
-            //          catching any exceptions:
-            try {
-
-                //  6.1.1.  Let `C` be `definition`'s constructor.
-                //  6.1.2.  Set `result` to Construct(`C`). Rethrow any exceptions.
-                result = definition.constructElement(true);
-                props = CustomElementProperties.get(result);
-
-                /* Steps 6.1.3 through 6.1.9 are completed by conformance.getError(). */
-
-                //  6.1.10. Set `result`'s namespace prefix to prefix.
-                //  6.1.11. Set `result`'s is value to null.
-            } catch (ex) {
-                common.nextElementIsSynchronous = false;
-
-                //  6.1.    (continued) If any of these subsubsteps threw an exception, then:
-                //  6.1.1E. Report the exception.
-                throwAsync(ex);
-
-                //  6.1.2E. Set `result` to a new element that implements the HTMLUnknownElement interface, with no
-                //          attributes, namespace set to the HTML namespace, namespace prefix set to `prefix`, local
-                //          name set to `localName`, custom element state set to "failed", custom element definition
-                //          set to null, is value set to null, and node document set to `document`.
-                result = definition.createElement(document);
-                props = new CustomElementProperties(result, definition);
-                props.state = STATES.FAILED;
-                if (!(result instanceof HTMLUnknownElement)) {
-                    setPrototypeOf(result, HTMLUnknownElementProto);
-                }
-            }
-        } else {
-            //  6.2.    Otherwise:
-            //  6.2.1.  Set `result` to a new element that implements the HTMLElement interface, with no attributes,
-            //          namespace set to the HTML namespace, namespace prefix set to `prefix`, local name set to
-            //          `localName`, custom element state set to "undefined", custom element definition set to null,
-            //          is value set to null, and node document set to `document`.
-            result = definition.createElement(document);
-            props = new CustomElementProperties(result, definition);
-
-            //  6.2.2.  Enqueue a custom element upgrade reaction given `result` and `definition`.
-            reactions.enqueueUpgradeReaction(props, definition);
-        }
-    } else {
-        //  7.      Otherwise:
-        //  7.1.    Let `interface` be the element interface for `localName` and `namespace`.
-        //  7.2.    Set `result` to a new element that implements `interface`, with no attributes, namespace set to
-        //          `namespace`, namespace prefix set to `prefix`, local name set to `localName`, custom element state
-        //          set to "uncustomized", custom element definition set to null, is value set to `is`, and node
-        //          document set to `document`.
-        result = fallbackMethod.apply(fallbackMethodThisArg, arrayFrom(fallbackMethodArgs));
-        if (is) {
-            Element_setAttributeNS.call(result, null, 'is', is);
-        }
-
-        //  7.3.    If `namespace` is the HTML namespace, and either `localName` is a valid custom element name or `is`
-        //          is non-null, then set `result`'s custom element state to "undefined".
-
-        // The above step is not applicable to the polyfill since it doesn't maintain a custom
-        // element state for elements without a matching definition.
-    }
-
-    // 8.   Return `result`.
-    return result;
-};
-
-},{"./common":4,"./custom-element-definition":7,"./custom-element-properties":8,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./reactions":16}],7:[function(require,module,exports){
-'use strict';
-
-/**
- * An object that contains the callbacks associated with a custom
- *   element definition.
- * 
- * @typedef {object} CustomElementCallbacks
- * 
- * @property {?function} adoptedCallback - The custom element's "adoptedCallback" prototype
- *   method.
- * @property {?function} attributeChangedCallback - The custom element's
- *   "attributeChangedCallback" prototype method.
- * @property {?function} connectedCallback - The custom element's "connectedCallback"
- *   prototype method.
- * @property {?function} disconnectedCallback - The custom element's "disconnectedCallback"
- *   prototype method.
- */
-
-var builtInElements = require('./built-in-elements'),
-    common = require('./common'),
-    conformance = require('./conformance'),
-    CustomElementProperties = require('./custom-element-properties'),
-
-    ADOPTED_CALLBACK = common.callbackNames.adopted,
-    Array = window.Array,
-    document = window.document,
-    Document = window.Document,
-    Element = window.Element,
-    ElementProto = Element.prototype,
-    getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
-    hasOwnProperty = common.hasOwnProperty,
-    HTMLElement = window.HTMLElement,
-    HTML_NAMESPACE = common.htmlNamespace,
-    NodeProto = window.Node.prototype,
-    states = common.states,
-
-    Document_createElementNS = Document.prototype.createElementNS,
-    Element_getAttributeNS = ElementProto.getAttributeNS,
-    Element_get_localName = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'localName') ? ElementProto : NodeProto, 'localName').get,
-    Element_get_namespaceURI = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'namespaceURI') ? ElementProto : NodeProto, 'namespaceURI').get,
-
-    /**
-     * A map that associates a custom element constructor with its corresponding
-     *   custom element definition.
-     * @type {Map}
-     */
-    defsByConstructor = new Map(),
-    /**
-     * A dictionary that associates a custom element name with its corresponding
-     *   custom element definition.
-     * @type {object}
-     */
-    defsByName = {},
-    /**
-     * A dictionary that associates a custom element prototype with its
-     *   corresponding custom element definition.
-     * @type {object}
-     */
-    defsByPrototype = new Map();
-
-/**
- * Creates a new custom element definition.
- * 
- * @class CustomElementDefinition
- * @classdesc Represents a custom element definition.
- * 
- * @param {string} name - The name of the custom element.
- * @param {string} localName - The local name (tag name) of the custom element.
- * @param {function} constructor - The constructor for the custom element.
- * @param {object} prototype - The custom element's prototype object.
- * @param {Array.<string>} observedAttributes - The list of attributes whose changes
- *   should be observed.
- * @param {CustomElementCallbacks} callbacks - The lifecycle callbacks for the custom
- *   element.
- * 
- * @property {function} baseInterface - The base HTMLElement interface from which this
- *   definition's prototype is derived.
- * @property {CustomElementCallbacks} callbacks - The lifecycle callbacks for the custom
- *   element.
- * @property {Array.<CustomElementProperties>} constructionStack - The definition's
- *   construction stack.
- * @property {function} constructor - The constructor for the custom element.
- * @property {boolean} hasAdoptedCallback - Whether or not this definition contains an
- *   "adoptedCallback" callback method. Used as a shortcut to determine whether the
- *   polyfill should keep track of the ownerDocument for custom elements created using
- *   this definition.
- * @property {boolean} isBuiltIn - Whether or not this definition is a customized built-in
- *   element definition.
- * @property {string} localName - The local name (tag name) of the custom element.
- * @property {string} name - The name of the custom element.
- * @property {Array.<string>} observedAttributes - The list of attributes whose changes
- *   should be observed.
- * @property {object} prototype - The custom element's prototype object.
- */
-function CustomElementDefinition(name, localName, constructor, prototype, observedAttributes, callbacks) {
-    this.name = name;
-    this.localName = localName;
-    this.constructor = constructor;
-    this.prototype = prototype;
-    this.observedAttributes = (observedAttributes instanceof Array && observedAttributes.length > 0) ? observedAttributes : [];
-    this.callbacks = callbacks;
-    this.constructionStack = [];
-    this.hasAdoptedCallback = typeof callbacks[ADOPTED_CALLBACK] === 'function';
-    this.isBuiltIn = localName !== name;
-    this.baseInterface = (localName === name ? HTMLElement : builtInElements.constructorFromTagName(localName)) || null;
-
-    defsByConstructor.set(constructor, this);
-    defsByName[name] = this;
-    defsByPrototype.set(prototype, this);
-};
-
-/**
- * Constructs a custom element using the constructor associated with the current
- *   CustomElementDefinition and returns the result from the constructor, rethrowing
- *   any exceptions.
- * 
- * @param {boolean} [synchronous] - Whether or not the synchronous custom elements
- *   flag should be set while constructing the custom element. Defaults to false.
- * 
- * @returns {*} The unmodified return value from the custom element constructor.
- */
-CustomElementDefinition.prototype.constructElement = function constructElement(synchronous) {
-    var hasError = false,
-        element, error, props;
-    if (synchronous) {
-        common.nextElementIsSynchronous = true;
-    }
-    try {
-        element = new this.constructor();
-    } catch (ex) {
-        hasError = true;
-        error = ex;
-    }
-    props = CustomElementProperties.get(element);
-    if (props) {
-        if (props.conformanceCheck === conformanceStatus.STARTED) {
-            if (hasError) {
-                conformance.cancelCheck(props);
-            } else {
-                error = conformance.getError(props);
-                hasError = !!error;
-            }
-        }
-        if (hasError) {
-            props.reactionQueue.length = 0;
-        }
-    }
-    if (hasError) {
-        throw error;
-    }
-    return element;
-};
-
-/**
- * Creates a new HTML element whose localName (and "is" attribute, if applicable) match
- *   those specified by the current CustomElementDefinition. The created element is not
- *   upgraded.
- * 
- * @param {Document} [doc] - The Document that will be set as the ownerDocument for the
- *   new element. Defaults to the default document for the current browsing context.
- * 
- * @returns {HTMLElement}
- */
-CustomElementDefinition.prototype.createElement = function (doc) {
-    var element;
-    if (!doc) {
-        doc = document;
-    }
-    element = Document_createElementNS.call(doc, HTML_NAMESPACE, this.localName);
-    if (this.isBuiltIn) {
-        Element_setAttributeNS.call(element, null, 'is', this.name);
-    }
-    return element;
-};
-
-/**
- * Invoked after an element using this CustomElementDefinition is constructed or upgraded.
- * 
- * @param {HTMLElement|CustomElementProperties} element - The element (or the
- *   CustomElementProperties for the element) that was constructed or upgraded.
- */
-CustomElementDefinition.prototype.finalizeElement = function (element) {
-    var props = CustomElementProperties.get(element);
-    if (!props) {
-        props = new CustomElementProperties(element, this);
-        props.upgradeEnqueued = true;
-    }
-    props.state = states.custom;
-};
-
-/**
- * Returns the CustomElementDefinition associated with the provided constructor function.
- * 
- * @param {function} constructor - The constructor function for which a matching
- *   definition is being searched.
- * 
- * @returns {?CustomElementDefinition} The custom element definition associated
- *   with the provided constructor function, or null if no definition has been
- *   registered with the provided constructor.
- */
-CustomElementDefinition.fromConstructor = function (constructor) {
-    return defsByConstructor.get(constructor) || null;
-};
-
-/**
- * Returns the CustomElementDefinition associated with the provided HTML element.
- * 
- * @param {HTMLElement} element - The HTML element for which a matching
- *   definition is being searched.
- * 
- * @returns {?CustomElementDefinition} The custom element definition associated
- *   with the provided HTML element, or null if no matching definition could
- *   be found for the provided element.
- */
-CustomElementDefinition.fromElement = function (element) {
-    var localName, name;
-    if (!(element instanceof HTMLElement) || Element_get_namespaceURI.call(element) !== HTML_NAMESPACE) {
-        return null;
-    }
-    localName = Element_get_localName.call(element);
-    if (localName.indexOf('-') > -1) {
-        name = localName;
-    } else {
-        name = Element_getAttributeNS.call(element, null, 'is');
-    }
-    return defsByName[name] || null;
-};
-
-/**
- * Returns the CustomElementDefinition associated with the provided tag name.
- *   It is assumed that the tag name is a valid custom element name, and has
- *   already been lowercased.
- * 
- * @param {string} tagName - The tag name of the definition to return.
- * 
- * @returns {?CustomElementDefinition} The custom element definition associated
- *   with the provided tag name, or null if no definition has been registered
- *   with the provided tag name.
- */
-CustomElementDefinition.fromName = function (name) {
-    return defsByName[name] || null;
-};
-
-/**
- * Returns the CustomElementDefinition associated with the provided prototype object.
- * 
- * @param {prototype} prototype - The prototype object for which a matching
- *   definition is being searched.
- * 
- * @returns {?CustomElementDefinition} The custom element definition associated with
- *   the provided prototype object, or null if no definition has been registered
- *   with the provided prototype.
- */
-CustomElementDefinition.fromPrototype = function (prototype) {
-    return defsByPrototype.get(prototype) || null;
-};
-
-/**
- * @param {Document} doc
- * @param {string} namespace
- * @param {string} localName
- * @param {string} is
- * @returns {?CustomElementDefinition}
- */
-CustomElementDefinition.lookup = function (doc, namespace, localName, is) {
-
-    var definition;
-
-    // HTML Standard: "Look up a custom element definition" algorithm
-    // https://html.spec.whatwg.org/multipage/scripting.html#look-up-a-custom-element-definition
-
-    // To look up a custom element definition, given a `document`, `namespace`, `localName`,
-    // and `is`, perform the following steps. They will return either a custom element
-    // definition or null:
-
-    // 1.   If `namespace` is not the HTML namespace, return null.
-    // 2.   If `document` does not have a browsing context, return null.
-    if (namespace !== HTML_NAMESPACE || !doc || !doc.defaultView) {
-        return null;
-    }
-
-    // 3.   Let `registry` be `document`'s browsing context's Window's CustomElementRegistry
-    //      object.
-    // 4.   If there is a custom element definition in `registry` with name and local name both
-    //      equal to `localName`, return that custom element definition.
-    // 5.   If there is a custom element definition in `registry` with name equal to `is` and
-    //      local name equal to `localName`, return that custom element definition.
-    definition = CustomElementDefinition.fromName(localName) || (is ? CustomElementDefinition.fromName(is) : null);
-    if (definition && definition.localName === localName) {
-        return definition;
-    }
-
-    // 6.   Return null.
-    return null;
-};
-
-module.exports = CustomElementDefinition;
-
-},{"./built-in-elements":2,"./common":4,"./conformance":5,"./custom-element-properties":8}],8:[function(require,module,exports){
-'use strict';
-
-var common = require('./common'),
-    priv = require('./private-property-store')('CustomElement'),
-
-    conformanceStatus = common.conformanceStatus,
-    getPrototypeOf = Object.getPrototypeOf,
-    Node_get_ownerDocument = Object.getOwnPropertyDescriptor(window.Node.prototype, 'ownerDocument').get,
-    states = common.states,
-    proto;
-
-/**
- * Creates a new property set associated with a custom element.
- * 
- * @classdesc Represents a set of internal properties associated with an individual
- *   instance of a custom element.
- * @class CustomElementProperties
- * 
- * @param {HTMLElement} element - The HTML element.
- * @param {CustomElementDefinition} definition - The custom element definition
- *   used by the element.
- * 
- * @property {number} conformanceCheck - Returns a value indicating the conformance
- *   check status for this custom element.
- * @property {?DOMException|TypeError} conformanceError - If the custom element
- *   failed a conformance check, this property contains an error explaining why.
- * @property {CustomElementDefinition} definition - The custom element definition
- *   used by the element.
- * @property {HTMLElement} element - The HTML element.
- * @property {?Array.<Attr>} originalAttributes - An array containing the custom
- *   element's original attribute nodes from before its constructor was run. This
- *   is only populated while the custom element's constructor is being checked for
- *   conformance.
- * @property {?Array.<Node>} originalChildNodes - An array containing the custom
- *   element's original child nodes from before its constructor was run. This is
- *   only populated while the custom element's constructor is being checked for
- *   conformance.
- * @property {?Document} originalDocument - The original Document under which the
- *   custom element was created. This is only populated while the custom element's
- *   constructor is being checked for conformance.
- * @property {Document} ownerDocument - The Document to which the custom element
- *   belongs. This is used to trigger the "adoptedCallback" whenever the element's
- *   "connectedCallback" is fired and it is discovered that the element's
- *   ownerDocument has changed.
- * @property {?boolean} parentNodeChanged - Whether the parentNode has been
- *   changed within the custom element constructor. This determines the return
- *   value of Node.prototype.parentNode for custom elements whose constructors are
- *   being checked for conformance.
- * @property {Array.<function>} reactionQueue - The custom element reaction queue
- *   for the element.
- * @property {string} state - The custom element state; either "undefined", "failed",
- *   "uncustomized", or "custom".
- * @property {boolean} synchronous - Whether the synchronous custom elements flag
- *   was set while the custom element was being created.
- * @property {boolean} upgradeEnqueued - True if the custom element either (a) has
- *   an upgrade reaction in its reactionQueue, or (b) has already been upgraded;
- *   otherwise, false.
- */
-function CustomElementProperties(element, definition) {
-    priv.set(element, this);
-    this.definition = definition;
-    this.element = element;
-    this.ownerDocument = Node_get_ownerDocument.call(element);
-    this.reactionQueue = [];
-}
-proto = CustomElementProperties.prototype;
-
-proto.conformanceCheck = conformanceStatus.NONE;
-proto.conformanceError = null;
-proto.originalAttributes = null;
-proto.originalChildNodes = null;
-proto.originalDocument = null;
-proto.parentNodeChanged = null;
-proto.state = states.undefined;
-proto.synchronous = false;
-proto.upgradeEnqueued = false;
-
-/**
- * Returns the custom element property set associated with the provided element,
- *   or null if the element is not associated with a custom element property set.
- *   Unlike the 'getOrCreate' method, this method will not create a new property
- *   set for the element, nor will it attempt to find a matching custom element
- *   definition.
- * 
- * @param {HTMLElement} element - The element whose property set will be retrieved.
- * 
- * @returns {?CustomElementProperties} The instance of CustomElementProperties
- *   associated with the provided element, or null if the provided element is not
- *   associated with a custom element property set.
- */
-CustomElementProperties.get = function get(element) {
-    return element == null ? null : (getPrototypeOf(element) === proto ? element : priv.get(element));
-};
-
-module.exports = CustomElementProperties;
-
-},{"./common":4,"./private-property-store":15}],9:[function(require,module,exports){
-'use strict';
-
-var builtInElements = require('./built-in-elements'),
-    classes = require('./classes'),
-    common = require('./common'),
-    CustomElementDefinition = require('./custom-element-definition'),
-    isValidCustomElementName = require('./is-valid-custom-element-name'),
-    nativeCustomElements = require('./native-custom-elements'),
-    reactions = require('./reactions'),
-
-    Array = window.Array,
-    ObjectProto = window.Object.prototype,
-
-    arrayFrom = Array.from,
-    callbackNames = common.callbackNames.all,
-    document = window.document,
-    Document_getElementsByTagName = window.Document.prototype.getElementsByTagName,
-    DOMException = window.DOMException,
-    Element_getAttributeNS = window.Element.prototype.getAttributeNS,
-    hasOwnProperty = common.hasOwnProperty,
-    isArray = Array.isArray,
-    isPrototypeOf = common.isPrototypeOf,
-    isRunning = false,
-    nativeConstructors = [],
-    Promise = window.Promise,
-    Promise_reject = Promise.reject.bind(Promise),
-    Promise_resolve = Promise.resolve.bind(Promise),
-    /**
-     * A dictionary where each key is the name of a custom element whose definition
-     *   is being awaited, and each value is a function that resolves the Promise
-     *   that was created for the definition.
-     * @type {object}
-     */
-    promiseResolvers = {},
-    /**
-     * A dictionary where each key is the name of a custom element whose definition
-     *   is being awated, and each value is a Promise that will be resolved once a
-     *   custom element with that name is defined within the registry.
-     * @type {object}
-     */
-    promises = {},
-    CustomElementRegistry,
-    instance,
-    String = window.String,
-    TypeError = window.TypeError;
-
-/**
- * An optional set of options used when defining a custom element via
- *   CustomElementRegistry.prototype.define().
- * 
- * @typedef {object} ElementDefinitionOptions
- * 
- * @property {string} extends - The name of the built-in element that
- *   the new custom element will extend.
- */
-
-/**
- * @param {string} method
- * @param {string} msg
- * @returns {string}
- */
-function methodError(method, msg) {
-    return "Failed to execute '" + method + "' on 'CustomElementRegistry': " + msg;
-}
-
-/**
- * @returns {string}
- */
-function constructorInUseError() {
-    return methodError('define', 'The provided constructor has already been used with this registry.');
-}
-
-/**
- * @param {string} method
- * @param {string} tagName
- * @returns {string}
- */
-function invalidNameError(method, tagName) {
-    return methodError(method, '"' + tagName + '" is not a valid custom element name');
-}
-
-/**
- * @param {string} tagName
- * @returns {string}
- */
-function nameInUseError(tagName) {
-    return methodError('define', 'The custom element name "' + tagName + '" has already been used with this registry.');
-}
-
-/**
- * @param {string} name
- * @returns {?Promise}
- */
-function resolveWhenDefinedPromise(name) {
-    var promise, resolve;
-    if (hasOwnProperty(promiseResolvers, name)) {
-        promise = promises[name];
-        resolve = promiseResolvers[name];
-        if (typeof resolve === 'function') {
-            resolve();
-        }
-        delete promiseResolvers[name];
-        delete promises[name];
-    }
-    return promise;
-}
-
-/**
- * @param {string} name
- * @param {function} resolve
- */
-function whenDefinedExecutor(name, resolve) {
-    promiseResolvers[name] = resolve;
-}
-
-CustomElementRegistry = (function () {
-
-    function CustomElementRegistry() {
-        if (instance) {
-            // Don't allow CustomElementRegistry to be created from user code
-            throw new TypeError(common.illegalConstructor);
-        }
-        instance = this;
-    }
-
-    if (classes.supported) {
-        // If ES6 classes are supported, we need to ensure that CustomElementRegistry
-        // is defined as a class, so its 'prototype' property is not writable.
-        return eval("(function(){return function(init){return class CustomElementRegistry{constructor(){init.call(this);}};};})()")(CustomElementRegistry);
-    }
-
-    return CustomElementRegistry;
-
-})();
-
-/**
- * Registers a new custom element definition.
- * @param {string} name - The name of the custom element.
- * @param {function} constructor - The constructor function for the custom element.
- * @param {ElementDefinitionOptions} [options] - An optional set of options.
- */
-CustomElementRegistry.prototype.define = function define(name, constructor, options) {
-
-    var validateArguments, extend, localName, prototype, callbacks, callbackName,
-        observedAttributes, attributes, definition, upgradeCandidates, i, l, args,
-        candidates, c;
-
-    if (this !== instance) {
-        throw new TypeError(methodError('define', common.illegalInvocation));
-    }
-
-    if (typeof constructor === 'function') {
-        constructor = classes.proxy(constructor);
-    }
-    extend = (options && hasOwnProperty(options, 'extends') && options.extends != null) ? String(options.extends) : null;
-    name = String(name);
-    validateArguments = nativeCustomElements ? !!extend : true;
-
-    // HTML Standard: "Custom Element Definition" algorithm
-    // https://html.spec.whatwg.org/multipage/scripting.html#element-definition
-
-    // 1.   If IsConstructor(`constructor`) is false, then throw a TypeError and
-    //      abort these steps.
-    // 2.   If `name` is not a valid custom element name, then throw a "SyntaxError"
-    //      DOMException and abort these steps.
-
-    // Argument validations (including steps 1 and 2 of the algorithm) only take
-    // place if the definition process can't be handed off to the native
-    // customElements implementation.
-    if (validateArguments) {
-        if (arguments.length < 2) {
-            throw new TypeError(methodError('define', '2 arguments required, but only ' + arguments.length + ' present.'));
-        }
-        if (options != null && !(options instanceof Object)) {
-            throw new TypeError(methodError('define', "Parameter 3 ('options') is not an object."));
-        }
-        if (typeof constructor !== 'function') {
-            throw new TypeError(methodError('define', "Parameter 2 ('constructor') is not a function."));
-        }
-        if (!isValidCustomElementName(name)) {
-            throw new DOMException(invalidNameError('define', name), 'SyntaxError');
-        }
-    }
-
-    // 3.   If this CustomElementRegistry contains an entry with name `name`,
-    //      then throw a "NotSupportedError" DOMException and abort these steps.
-    if (CustomElementDefinition.fromName(name) || (nativeCustomElements && nativeCustomElements.get(name))) {
-        // If a native customElements implementation exists and the current definition
-        // is for an autonomous custom element, then the check for an existing definition
-        // via Definition.fromName() has already been made, and we don't need to repeat it.
-        throw new DOMException(nameInUseError(name), 'NotSupportedError');
-    }
-
-    // 4.   If this CustomElementRegistry contains an entry with constructor
-    //      `constructor`, then throw a "NotSupportedError" DOMException and
-    //      abort these steps.
-    if (CustomElementDefinition.fromConstructor(constructor)) {
-        throw new DOMException(constructorInUseError(), 'NotSupportedError');
-    } else if (nativeCustomElements) {
-        i = nativeConstructors.length;
-        while (i--) {
-            if (nativeConstructors[i] === constructor) {
-                throw new DOMException(constructorInUseError(), 'NotSupportedError');
-            }
-        }
-    }
-
-    if (nativeCustomElements && !extend) {
-        // At this point, if a native customElements implementation exists, and the
-        // definition is for an autonomous custom element, then we defer to the
-        // native define() method.
-        args = [];
-        i = arguments.length;
-        while (i--) {
-            args[i] = i === 1 ? constructor : arguments[i];
-        }
-        isRunning = true;
-        try {
-            nativeCustomElements.define.apply(nativeCustomElements.instance, args);
-        } finally {
-            isRunning = false;
-        }
-        constructor = nativeCustomElements.get(name);
-        if (constructor) {
-            nativeConstructors[nativeConstructors.length] = constructor;
-            resolveWhenDefinedPromise(name);
-        }
-        return;
-    }
-
-    // 5.   Let `localName` be `name`.
-    localName = name;
-
-    // 6.   Let `extends` be the value of the 'extends' member of `options`, or
-    //      null if no such member exists.
-    // 7.   If `extends` is not null, then:
-    if (extend) {
-        // 7.1.     If `extends` is a valid custom element name, then throw a "NotSupportedError"
-        //          DOMException.
-        if (isValidCustomElementName(extend)) {
-            throw new DOMException(methodError('define', "The tag name specified in the 'extends' option (\"" + extend + "\") cannot be a custom element name."), 'NotSupportedError');
-        }
-        // 7.2.     If the element interface for `extends` and the HTML namespace is
-        //          HTMLUnknownElement (e.g., if `extends` does not indicate an element
-        //          definition in this specification), then throw a "NotSupportedError"
-        //          DOMException.
-        if (!builtInElements.isKnownTagName(extend)) {
-            throw new DOMException(methodError('define', "The tag name specified in the 'extends' option (\"" + extend + "\") is not the name of a built-in element."), 'NotSupportedError');
-        }
-        // 7.3.     Let `localName` be `extends`.
-        localName = extend;
-    }
-
-    // 8.   If this CustomElementRegistry's "element definition is running" flag is set,
-    //      then throw a "NotSupportedError" DOMException and abort these steps.
-    if (isRunning) {
-        throw new DOMException(methodError('define', "The registry is currently processing another custom element definition."), 'NotSupportedError');
-    }
-
-    // 9.   Set this CustomElementRegistry's "element definition is running" flag.
-    isRunning = true;
-
-    // 10.  Run the following substeps while catching any exceptions:
-    try {
-        // 10.1.    Let `prototype` be Get(`constructor`, "prototype"). Rethrow any exceptions.
-        prototype = constructor.prototype;
-
-        // 10.2.    If Type(`prototype`) is not Object, then throw a TypeError exception.
-        if (prototype == null || !isPrototypeOf(ObjectProto, prototype)) {
-            throw new TypeError(methodError('define', "The 'prototype' property of the provided constructor is not an object. (Is the constructor a bound function?)"));
-        }
-
-        // 10.3.    `Let lifecycleCallbacks` be a map with the four keys "connectedCallback",
-        //          "disconnectedCallback", "adoptedCallback", and "attributeChangedCallback",
-        //          each of which belongs to an entry whose value is null.
-        callbacks = {};
-
-        // 10.4.    For each of the four keys `callbackName` in `lifecycleCallbacks`, in the order
-        //          listed in the previous step:
-        i = callbackNames.length;
-        while (i--) {
-            callbackName = callbackNames[i];
-
-            // 10.4.1.  Let `callbackValue` be Get(`prototype`, `callbackName`). Rethrow any exceptions.
-            var callback = prototype[callbackName];
-
-            // 10.4.2.  If `callbackValue` is not undefined, then set the value of the entry in
-            //          `lifecycleCallbacks` with key `callbackName` to the result of converting
-            //          `callbackValue` to the Web IDL `Function` callback type. Rethrow any exceptions
-            //          from the conversion.
-            if (callback !== void 0 && typeof callback !== 'function') {
-                throw new TypeError(methodError('define', "The provided constructor's '" + callbackName + "' prototype property is not a function."));
-            }
-            callbacks[callbackName] = callback || null;
-        }
-
-        // 10.5.    Let `observedAttributes` be an empty `sequence<DOMString>`.
-        observedAttributes = null;
-
-        // 10.6.    If the value of the entry in `lifecycleCallbacks` with key "attributeChangedCallback"
-        //          is not null, then:
-        if (callbacks.attributeChangedCallback != null) {
-            // 10.6.1.  Let `observedAttributesIterable` be Get(`constructor`, "observedAttributes"). Rethrow
-            //          any exceptions.
-            attributes = constructor.observedAttributes;
-
-            // 10.6.2.  If `observedAttributesIterable` is not undefined, then set `observedAttributes` to the
-            //          result of converting `observedAttributesIterable` to a `sequence<DOMString>`. Rethrow
-            ///         any exceptions from the conversion.
-            if (attributes !== void 0) {
-                if (!isArray(attributes)) {
-                    try {
-                        attributes = arrayFrom(attributes);
-                    } catch (e) {
-                        throw new TypeError(methodError('define', "The provided constructor's 'observedAttributes' property is not an Array (or an Array-like object)."));
-                    }
-                }
-                observedAttributes = [];
-                i = 0;
-                l = attributes.length;
-                while (i < l) {
-                    observedAttributes[i] = String(attributes[i]);
-                    i++;
-                }
-            }
-        }
-
-    } finally {
-        // 10.  (continued)
-        //      Then, perform the following substep, regardless of whether the above
-        //      steps threw an exception or not:
-        //
-        //      1.  Unset this CustomElementRegistry's "element definition is running" flag.
-        isRunning = false;
-
-        // 10.  (continued)
-        //      Finally, if the first set of substeps threw an exception, then rethrow
-        //      that exception, and terminate this algorithm. Otherwise, continue onward.
-    }
-
-    // 11.  Let `definition` be a new custom element definition with name `name`, local
-    //      name `localName`, constructor `constructor`, prototype `prototype`, observed
-    //      attributes `observedAttributes`, and lifecycle callbacks `lifecycleCallbacks`.
-    definition = new CustomElementDefinition(name, localName, constructor, prototype, observedAttributes, callbacks);
-
-    // 12.  Add `definition` to this CustomElementRegistry.
-    // (Step 12 is completed within the Definition() constructor.)
-
-    // 13.  Let `document` be this CustomElementRegistry's relevant global object's
-    //      associated Document.
-    // 14.  Let `upgrade candidates` be all elements that are shadow-including descendants
-    //      of `document`, whose namespace is the HTML namespace and whose local name is
-    //      `localName`, in shadow-including tree order. Additionally, if `extends` is
-    //      non-null, only include elements whose 'is' value is equal to `name`.
-    upgradeCandidates = Document_getElementsByTagName.call(document, localName);
-    if (extend) {
-        candidates = [];
-        c = 0;
-        i = 0;
-        l = upgradeCandidates.length;
-        while (i < l) {
-            if (Element_getAttributeNS.call(upgradeCandidates[i], null, 'is') === definition.name) {
-                candidates[c++] = upgradeCandidates[i];
-            }
-            i++;
-        }
-        upgradeCandidates = candidates;
-    }
-
-    // 15.  For each element `element` in `upgrade candidates`, enqueue a custom element
-    //      upgrade reaction given `element` and `definition`.
-    l = upgradeCandidates.length;
-    i = 0;
-    reactions.pushQueue();
-    while (i < l) {
-        reactions.enqueueUpgradeReaction(upgradeCandidates[i++], definition);
-    }
-    reactions.popQueue();
-
-    // 16.  If this CustomElementRegistry's when-defined promise map contains an entry
-    //      with key `name`:
-    // 16.1.    Let `promise` be the value of that entry.
-    // 16.2.    Resolve `promise` with `undefined`.
-    // 16.3.    Delete the entry with key `name` from this CustomElementRegistry's
-    //          when-defined promise map.
-    resolveWhenDefinedPromise(name);
-};
-
-/**
- * Returns the constructor for the custom element in this CustomElementRegistry with
- *   the provided name, or undefined if this registry does not contain a custom element
- *   definition with the provided name.
- *
- * @param {string} name - The name of the custom element whose constructor will be
- *   retrieved.
- * @returns {function} The constructor for the custom element in this CustomElementRegistry
- *   with the provided name, or undefined if this registry does not contain a custom
- *   element definition with the provided name.
- */
-CustomElementRegistry.prototype.get = function get(name) {
-    var definition;
-    if (this !== instance) {
-        throw new TypeError(methodError('get', common.illegalInvocation));
-    }
-    if (arguments.length === 0) {
-        throw new TypeError(methodError('get', '1 argument required, but only 0 present.'));
-    }
-    if (nativeCustomElements) {
-        definition = nativeCustomElements.get(name);
-        if (definition) {
-            return definition;
-        }
-    }
-    definition = CustomElementDefinition.fromName(String(name));
-    return definition ? definition.constructor : void 0;
-};
-
-/**
- * Returns a Promise that is resolved when a custom element is registered with this
- * CustomElementRegistry that has the provided name.
- * 
- * @param {string} name - The name of the custom element whose definition is being awaited.
- * @returns {Promise} A Promise that is resolved with no value when a custom element is
- *   registered with this CustomElementRegistry that has the provided name. If the given
- *   name is not a valid custom element name, then the returned Promise is rejected immediately.
- */
-CustomElementRegistry.prototype.whenDefined = function whenDefined(name) {
-    var promise;
-
-    if (this !== instance) {
-        return Promise_reject(new TypeError(methodError('whenDefined', common.illegalInvocation)));
-    }
-    if (arguments.length === 0) {
-        return Promise_reject(new TypeError(methodError('whenDefined', '1 argument required, but only 0 present.')))
-    }
-
-    name = String(name);
-
-    // HTML Standard: CustomElementRegistry.prototype.whenDefined() specification
-    // https://html.spec.whatwg.org/multipage/scripting.html#dom-customelementregistry-whendefined
-
-    // 1.   If `name` is not a valid custom element name, then return a new promise
-    //      rejected with a "SyntaxError" DOMException and abort these steps.
-    if (!isValidCustomElementName(name)) {
-        return Promise_reject(new DOMException(invalidNameError('whenDefined', name), 'SyntaxError'));
-    }
-
-    // 2.   If this CustomElementRegistry contains an entry with name `name`, then return
-    //      a new promise resolved with `undefined` and abort these steps.
-    if (CustomElementDefinition.fromName(name) || (nativeCustomElements && nativeCustomElements.get(name))) {
-        return Promise_resolve();
-    }
-
-    // 3.   Let `map` be this CustomElementRegistry's when-defined promise map.
-    // 4.   If `map` does not contain an entry with key `name`, create an entry in `map`
-    //      with key `name` and whose value is a new promise.
-    // 5.   Let `promise` be the value of the entry in `map` with key `name`.
-    if (hasOwnProperty(promises, name)) {
-        promise = promises[name];
-    } else {
-        promise = new Promise(whenDefinedExecutor.bind(null, name));
-        promises[name] = promise;
-    }
-
-    // 6.   Return `promise`.
-    return promise;
-};
-
-module.exports = CustomElementRegistry;
-
-},{"./built-in-elements":2,"./classes":3,"./common":4,"./custom-element-definition":7,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./reactions":16}],10:[function(require,module,exports){
-(function (global){
-(function (window, undefined) {
-    'use strict';
-
-    require('./other-polyfills/Array.from');
-    require('./other-polyfills/DOMException');
-
-    var common = require('./common'),
-        baseElementConstructor,
-        builtInElements,
-        classes,
-        CustomElementRegistry,
-        isValidCustomElementName,
-        nativeCustomElements,
-        reactions,
-        shims,
-
-        getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
-
-        api = {},
-        arrayFrom = Array.from,
-        defineProperty = Object.defineProperty,
-        defineProperties = Object.defineProperties,
-        document = window.document,
-        EventTargetProto = (window.EventTarget || window.Node).prototype,
-        EventTarget_removeEventListener,
-        isDocumentReady = common.isDocumentReady,
-        isPrototypeOf = common.isPrototypeOf,
-        NodeProto = window.Node.prototype,
-        Node_compareDocumentPosition = NodeProto.compareDocumentPosition,
-        Node_get_ownerDocument = getOwnPropertyDescriptor(NodeProto, 'ownerDocument').get,
-        Node_isConnected = getOwnPropertyDescriptor(NodeProto, 'isConnected'),
-        onReady,
-        registry,
-        TypeError = window.TypeError;
-
-    classes = require('./classes');
-    isValidCustomElementName = require('./is-valid-custom-element-name');
-    nativeCustomElements = require('./native-custom-elements');
-
-    module.exports = defineProperties(api, {
-        isValidCustomElementName: {
-            enumerable: true,
-            value: isValidCustomElementName
-        },
-        support: {
-            enumerable: true,
-            value: defineProperties({}, {
-                autonomousCustomElements: {
-                    enumerable: true,
-                    value: !!nativeCustomElements
-                },
-                classes: {
-                    enumerable: true,
-                    value: classes.supported
-                },
-                customizedBuiltInElements: {
-                    enumerable: true,
-                    value: nativeCustomElements != null && nativeCustomElements.canExtend
-                }
-            })
-        },
-        version: {
-            enumerable: true,
-            value: '{VERSION_PLACEHOLDER}'
-        }
-    });
-    window.customElementsPolyfill = api;
-
-    // Node.prototype.isConnected polyfill
-    if (!Node_isConnected || typeof Node_isConnected.get !== 'function') {
-        defineProperty(NodeProto, 'isConnected', {
-            configurable: true,
-            enumerable: true,
-            /**
-             * @this {Node}
-             * @returns {boolean}
-             */
-            get: function () {
-                var doc;
-                if (!isPrototypeOf(NodeProto, this)) {
-                    throw new TypeError(common.illegalInvocation);
-                }
-                doc = Node_get_ownerDocument.call(this);
-                return doc && !!(Node_compareDocumentPosition.call(doc, this) & 16);
-            }
-        });
-    }
-
-    if (nativeCustomElements && nativeCustomElements.canExtend) {
-        // If a native CustomElementRegistry exists, and it already supports customized
-        // built-in elements, then all we need to do is hook into customElements.define()
-        // to ensure that any constructors passed to the native define() method are turned
-        // into ES6 classes first.
-        nativeCustomElements.prototype.define = function define(name, constructor, options) {
-            var args = arrayFrom(arguments);
-            if (arguments.length > 1) {
-                args[1] = classes.proxy(constructor);
-            }
-            return nativeCustomElements.define.apply(this, args);
-        };
-        defineProperty(api, 'shim', {
-            enumerable: true,
-            value: function () { }
-        });
-        return;
-    }
-
-    /*
-     * All of the remaining functionality beyond this point assumes that the above check
-     * failed; that is, either (a) the native customElements implementation supports
-     * autonomous custom elements and NOT customized built-in elements, or (b) there is
-     * no native customElements implementation at all.
-     */
-
-    baseElementConstructor = require('./base-element-constructor');
-    builtInElements = require('./built-in-elements');
-    reactions = require('./reactions');
-
-    (function () {
-
-        /**
-         * The routine below patches the native HTML element interfaces (HTMLAnchorElement,
-         * HTMLDivElement, etc) so they can serve as bases for user-defined classes in
-         * cooperation with the ES6 class proxying mechanism defined in the 'classes' module.
-         */
-
-        var names = builtInElements.interfaceNames,
-            i = 0,
-            l = names.length,
-            HTMLElement = window.HTMLElement,
-            name, interf, finalConstructor;
-
-        window.HTMLElement = classes.proxy(HTMLElement, (nativeCustomElements ? window.HTMLElement : function () {
-            return baseElementConstructor.call(this, HTMLElement);
-        }));
-
-        while (i < l) {
-            name = names[i++];
-            interf = builtInElements.constructorFromInterfaceName(name);
-            finalConstructor = nativeCustomElements && nativeCustomElements.canExtend ? interf : (function (a) {
-                return function () {
-                    return baseElementConstructor.call(this, a);
-                };
-            })(interf);
-            window[name] = classes.proxy(interf, finalConstructor);
-        }
-
-    })();
-
-    CustomElementRegistry = require('./custom-element-registry');
-    shims = require('./shims');
-
-    registry = new CustomElementRegistry();
-
-    defineProperties(window, {
-        CustomElementRegistry: {
-            configurable: true,
-            value: CustomElementRegistry,
-            writable: true
-        },
-        customElements: {
-            configurable: true,
-            enumerable: true,
-            get: function () {
-                return registry;
-            }
-        }
-    });
-
-    defineProperty(api, 'shim', {
-        enumerable: true,
-        value: shims.shim
-    });
-
-    common.mainDocumentReady = isDocumentReady(document);
-    reactions.observeDocument(document);
-
-    if (!common.mainDocumentReady) {
-        reactions.pushQueue();
-
-        EventTarget_removeEventListener = EventTargetProto.removeEventListener;
-        onReady = function () {
-            reactions.popQueue();
-            common.mainDocumentReady = true;
-            EventTarget_removeEventListener.call(document, 'DOMContentLoaded', onReady, false);
-        };
-        EventTargetProto.addEventListener.call(document, 'DOMContentLoaded', onReady, false);
-    }
-
-})(typeof global !== 'undefined' ? global : (typeof self !== 'undefined' ? self : (typeof window !== 'undefined' ? window : {})));
-}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./base-element-constructor":1,"./built-in-elements":2,"./classes":3,"./common":4,"./custom-element-registry":9,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./other-polyfills/Array.from":13,"./other-polyfills/DOMException":14,"./reactions":16,"./shims":17}],11:[function(require,module,exports){
-'use strict';
-
-var reg_reservedTagNames = /^(?:annotation-xml|color-profile|font-face(?:-(?:src|uri|format|name))?|missing-glyph)$/,
-    reg_validCustomElementName = (function () {
-        var supportsRegexUnicodeFlag = (function () {
-            try {
-                new RegExp('1', 'u');
-                return true;
-            } catch (ex) {
-                return false;
-            }
-        })();
-
-        // If the browser supports the 'u' flag, then the '\u{xxxxx}' token is used to
-        // detect code points in the astral plane. The browser's implementation is likely
-        // to be faster than the fallback regular expression in the 'else' block.
-        if (supportsRegexUnicodeFlag) {
-            return new RegExp('^[a-z][\\-\\.0-9_a-z\\xB7\\xC0-\\xD6\\xD8-\\xF6\\xF8-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u203F-\\u2040\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD\\u{10000}-\\u{EFFFF}]*-[\\-\\.0-9_a-z\\xB7\\xC0-\\xD6\\xD8-\\xF6\\xF8-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u203F-\\u2040\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD\\u{10000}-\\u{EFFFF}]*$', 'u');
-        } else {
-            return /^[a-z](?:[\-\.0-9_a-z\xB7\xC0-\xD6\xD8-\xF6\xF8-\u037D\u037F-\u1FFF\u200C\u200D\u203F\u2040\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD]|[\uD800-\uDB7F][\uDC00-\uDFFF])*\-(?:[\-\.0-9_a-z\xB7\xC0-\xD6\xD8-\xF6\xF8-\u037D\u037F-\u1FFF\u200C\u200D\u203F\u2040\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD]|[\uD800-\uDB7F][\uDC00-\uDFFF])*$/;
-        }
-    })();
-
-/**
- * Determines whether the provided tag name is a valid custom element name.
- * @param {string} tagName - The tag name.
- * @returns {boolean}
- */
-function isValidCustomElementName(tagName) {
-    return (!reg_reservedTagNames.test(tagName) && reg_validCustomElementName.test(tagName));
-}
-
-module.exports = isValidCustomElementName;
-
-},{}],12:[function(require,module,exports){
-'use strict';
-
-var classes = require('./classes'),
-    globalEval = window.eval,
-    instance, prototype, define, get, whenDefined;
-
-// If the browser doesn't support ES6 classes, then it's guaranteed that the browser
-// also doesn't have a native custom elements implementation.
-if (classes.supported && typeof window.CustomElementRegistry === 'function' && window.customElements instanceof window.CustomElementRegistry) {
-    instance = window.customElements;
-    prototype = window.CustomElementRegistry.prototype;
-    define = prototype.define.bind(instance);
-    get = prototype.get.bind(instance);
-    whenDefined = prototype.whenDefined.bind(instance);
-
-    module.exports = {
-        canExtend: (function () {
-            var name = 'custom-elements-polyfill-test',
-                constructor, e;
-            try {
-                constructor = globalEval("(function(){return class extends HTMLDivElement{constructor(){super();}};})()");
-                define(name, constructor, { 'extends': 'div' });
-                e = new constructor();
-                return (e && e instanceof HTMLDivElement && e.tagName === 'DIV' && e.getAttribute('is') === name);
-            } catch (ex) {
-                return false;
-            }
-        })(),
-        define: define,
-        'get': get,
-        instance: instance,
-        prototype: prototype,
-        whenDefined: whenDefined
-    };
-} else {
-    module.exports = false;
-}
-
-},{"./classes":3}],13:[function(require,module,exports){
-module.exports = (function () {
-    var toStr, isCallable, toInteger, maxSafeInteger, toLength, from;
-    if (typeof Array.from === 'function') {
-        return Array.from;
-    }
-
-    toStr = Object.prototype.toString,
-    isCallable = function (fn) {
-        return typeof fn === 'function' || toStr.call(fn) === '[object Function]';
-    };
-    toInteger = function (value) {
-        var number = Number(value);
-        if (isNaN(number)) { return 0; }
-        if (number === 0 || !isFinite(number)) { return number; }
-        return (number > 0 ? 1 : -1) * Math.floor(Math.abs(number));
-    };
-    maxSafeInteger = Math.pow(2, 53) - 1;
-    toLength = function (value) {
-        var len = toInteger(value);
-        return Math.min(Math.max(len, 0), maxSafeInteger);
-    };
-    from = function from(arrayLike) {
-        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/from#Browser_compatibility
-        // Production steps of ECMA-262, Edition 6, 22.1.2.1
-        // Reference: https://people.mozilla.org/~jorendorff/es6-draft.html#sec-array.from
-
-        var C, items, mapFn, T, len, A, k, kValue;
-
-        // 1. Let C be the this value.
-        C = this;
-
-        // 2. Let items be ToObject(arrayLike).
-        items = Object(arrayLike);
-
-        // 3. ReturnIfAbrupt(items).
-        if (arrayLike == null) {
-            throw new TypeError("Array.from requires an array-like object - not null or undefined");
-        }
-
-        // 4. If mapfn is undefined, then let mapping be false.
-        mapFn = arguments.length > 1 ? arguments[1] : void undefined;
-        if (typeof mapFn !== 'undefined') {
-            // 5. else
-            // 5. a. If IsCallable(mapfn) is false, throw a TypeError exception.
-            if (!isCallable(mapFn)) {
-                throw new TypeError('Array.from: when provided, the second argument must be a function');
-            }
-
-            // 5. b. If thisArg was supplied, let T be thisArg; else let T be undefined.
-            if (arguments.length > 2) {
-                T = arguments[2];
-            }
-        }
-
-        // 10. Let lenValue be Get(items, "length").
-        // 11. Let len be ToLength(lenValue).
-        len = toLength(items.length);
-
-        // 13. If IsConstructor(C) is true, then
-        // 13. a. Let A be the result of calling the [[Construct]] internal method of C with an argument list containing the single item len.
-        // 14. b. Else, Let A be ArrayCreate(len).
-        A = isCallable(C) ? Object(new C(len)) : new Array(len);
-
-        // 16. Let k be 0.
-        k = 0;
-        // 17. Repeat, while k < len (also steps a - h)
-        while (k < len) {
-            kValue = items[k];
-            if (mapFn) {
-                A[k] = typeof T === 'undefined' ? mapFn(kValue, k) : mapFn.call(T, kValue, k);
-            } else {
-                A[k] = kValue;
-            }
-            k += 1;
-        }
-        // 18. Let putStatus be Put(A, "length", len, true).
-        A.length = len;
-        // 20. Return A.
-        return A;
-    };
-    Object.defineProperty(Array, 'from', {
-        configurable: true,
-        enumerable: false,
-        value: from,
-        writable: true
-    });
-    return from;
-}());
-
-},{}],14:[function(require,module,exports){
-(function (global){
-(function (window) {
-    'use strict';
-
-    var constructorError = "Failed to construct 'DOMException': Please use the 'new' operator, this DOM object constructor cannot be called as a function.",
-        defineProperties = Object.defineProperties,
-        defineProperty = Object.defineProperty,
-        DOMException = window.DOMException,
-        Error = window.Error,
-        hasOwnProperty = (function () {
-            var hOP = Object.prototype.hasOwnProperty;
-            return function (O, p) {
-                return hOP.call(O, p);
-            };
-        })(),
-        nativePrototype = typeof DOMException === 'function' ? DOMException.prototype : null,
-        nativeConstructor = nativePrototype ? (function () {
-            try {
-                new DOMException('', 'SyntaxError');
-                return DOMException;
-            } catch (e) {
-                return null;
-            }
-        })() : null,
-        getters = false,
-        nativeGetters = false,
-        ILLEGAL_INVOCATION = 'Illegal invocation',
-        String = window.String,
-        TypeError = window.TypeError,
-
-        get_code, get_message, get_name,
-        codes, props, names, i, l, constants, code;
-
-    if (nativeConstructor && nativePrototype) {
-        module.exports = DOMException;
-        return;
-    } else if (nativePrototype) {
-        get_code = Object.getOwnPropertyDescriptor(nativePrototype, 'code');
-        if (get_code && get_code.get) {
-            getters = true;
-            nativeGetters = true;
-            get_code = get_code.get;
-            get_message = Object.getOwnPropertyDescriptor(nativePrototype, 'message').get;
-            get_name = Object.getOwnPropertyDescriptor(nativePrototype, 'name').get;
-        }
-    } else {
-        getters = true;
-    }
-
-    props = getters ? new WeakMap() : null;
-
-    codes = {
-        IndexSizeError: { code: 1, constant: 'INDEX_SIZE_ERR' },
-        HierarchyRequestError: { code: 3, constant: 'HIERARCHY_REQUEST_ERR' },
-        WrongDocumentError: { code: 4, constant: 'WRONG_DOCUMENT_ERR' },
-        InvalidCharacterError: { code: 5, constant: 'INVALID_CHARACTER_ERR' },
-        NoModificationAllowedError: { code: 7, constant: 'NO_MODIFICATION_ALLOWED_ERR' },
-        NotFoundError: { code: 8, constant: 'NOT_FOUND_ERR' },
-        NotSupportedError: { code: 9, constant: 'NOT_SUPPORTED_ERR' },
-        InvalidStateError: { code: 11, constant: 'INVALID_STATE_ERR' },
-        SyntaxError: { code: 12, constant: 'SYNTAX_ERR' },
-        InvalidModificationError: { code: 13, constant: 'INVALID_MODIFICATION_ERR' },
-        NamespaceError: { code: 14, constant: 'NAMESPACE_ERR' },
-        InvalidAccessError: { code: 15, constant: 'INVALID_ACCESS_ERR' },
-        TypeMismatchError: { code: 17, constant: 'TYPE_MISMATCH_ERR' },
-        SecurityError: { code: 18, constant: 'SECURITY_ERR' },
-        NetworkError: { code: 19, constant: 'NETWORK_ERR' },
-        AbortError: { code: 20, constant: 'ABORT_ERR' },
-        URLMismatchError: { code: 21, constant: 'URL_MISMATCH_ERR' },
-        QuotaExceededError: { code: 22, constant: 'QUOTA_EXCEEDED_ERR' },
-        TimeoutError: { code: 23, constant: 'TIMEOUT_ERR' },
-        InvalidNodeTypeError: { code: 24, constant: 'INVALID_NODE_TYPE_ERR' },
-        DataCloneError: { code: 25, constant: 'DATA_CLONE_ERR' }
-    };
-
-    DOMException = function DOMException(message, name) {
-        var code, err;
-        if (!(this instanceof DOMException) || (props && props.has(this))) {
-            throw new TypeError(constructorError);
-        }
-        if (nativePrototype && getters) {
-            try {
-                get_code.call(this);
-            } catch (ex) {
-                err = ex;
-            }
-            if (!err) {
-                throw new TypeError(constructorError);
-            }
-        }
-        Error.call(this);
-        code = hasOwnProperty(codes, name) ? codes[name].code : 0;
-        message = message === undefined ? '' : String(message);
-        name = (name === undefined) ? 'Error' : String(name);
-        if (getters) {
-            props.set(this, {
-                code: code,
-                message: message,
-                name: name
-            });
-            if (hasOwnProperty(this, 'message')) {
-                delete this.message;
-            }
-            if (hasOwnProperty(this, 'name')) {
-                delete this.name;
-            }
-        } else {
-            defineProperties(this, {
-                code: {
-                    configurable: true,
-                    enumerable: true,
-                    value: code
-                },
-                message: {
-                    configurable: true,
-                    enumerable: true,
-                    value: message
-                },
-                name: {
-                    configurable: true,
-                    enumerable: true,
-                    value: name
-                }
-            });
-        }
-    };
-
-    module.exports = DOMException;
-    defineProperty(window, 'DOMException', {
-        configurable: true,
-        enumerable: false,
-        value: DOMException,
-        writable: true
-    });
-
-    if (nativeGetters) {
-        DOMException.prototype = defineProperties(nativePrototype, {
-            constructor: {
-                configurable: true,
-                enumerable: false,
-                value: DOMException,
-                writable: true
-            },
-            code: {
-                configurable: true,
-                enumerable: true,
-                get: function () {
-                    var p = props.get(this);
-                    return p ? p.code : get_code.call(this);
-                }
-            },
-            message: {
-                configurable: true,
-                enumerable: true,
-                get: function () {
-                    var p = props.get(this);
-                    return p ? p.message : get_message.call(this);
-                }
-            },
-            name: {
-                configurable: true,
-                enumerable: true,
-                get: function () {
-                    var p = props.get(this);
-                    return p ? p.name : get_name.call(this);
-                }
-            }
-        });
-
-        return;
-    }
-
-    names = Object.getOwnPropertyNames(codes);
-
-    DOMException.prototype = Object.create(Error.prototype, {
-        constructor: {
-            configurable: true,
-            enumerable: false,
-            value: DOMException,
-            writable: true
-        }
-    });
-
-    if (getters) {
-        defineProperties(DOMException.prototype, {
-            code: {
-                configurable: true,
-                enumerable: true,
-                get: function () {
-                    var p = this instanceof DOMException ? props.get(this) : null;
-                    if (!p) {
-                        throw new TypeError(ILLEGAL_INVOCATION);
-                    }
-                    return p.code;
-                }
-            },
-            message: {
-                configurable: true,
-                enumerable: true,
-                get: function () {
-                    var p = this instanceof DOMException ? props.get(this) : null;
-                    if (!p) {
-                        throw new TypeError(ILLEGAL_INVOCATION);
-                    }
-                    return p.message;
-                }
-            },
-            name: {
-                configurable: true,
-                enumerable: true,
-                get: function () {
-                    var p = this instanceof DOMException ? props.get(this) : null;
-                    if (!p) {
-                        throw new TypeError(ILLEGAL_INVOCATION);
-                    }
-                    return p.name;
-                }
-            }
-        });
-    }
-
-    constants = {};
-    i = 0;
-    l = names.length;
-    while (i < l) {
-        code = codes[names[i++]];
-        constants[code.constant] = {
-            configurable: false,
-            enumerable: true,
-            value: code.code,
-            writable: false
-        };
-    }
-
-    defineProperties(DOMException, constants);
-    defineProperties(DOMException.prototype, constants);
-
-})(typeof global !== 'undefined' ? global : (typeof self !== 'undefined' ? self : (typeof window !== 'undefined' ? window : {})));
-
-}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],15:[function(require,module,exports){
-'use strict';
-
-var concat = Array.prototype.concat,
-    createKey,
-    defineProperties = Object.defineProperties,
-    defineProperty = Object.defineProperty,
-    deletePrivateProperties,
-    getDescriptor,
-    getDescriptors,
-    getDescriptorsNew,
-    getPrivateProperties,
-    getNames,
-    getSymbols,
-    getSymbolsNew,
-    hasOwnProperty = (function () {
-        var hOP = Object.prototype.hasOwnProperty;
-        return function hasOwnProperty(O, p) {
-            return hOP.call(O, p);
-        };
-    })(),
-    hasPrivateProperties,
-    privateSymbols,
-    setPrivateProperties,
-    Symbol = typeof window.Symbol === 'function' && window.Symbol,
-    WeakMap = window.WeakMap,
-    WeakMap_get,
-    WeakMap_set;
-
-/**
- * @param {*} target
- * @returns {boolean}
- */
-function isObject(target) {
-    var t = target != null && typeof target;
-    return t === 'function' || t === 'object';
-}
-
-if (Symbol) {
-
-    getDescriptors = Object.getOwnPropertyDescriptors;
-    getSymbols = Object.getOwnPropertySymbols;
-    privateSymbols = [];
-
-    /**
-     * @param {string} [name]
-     * @returns {Symbol}
-     */
-    createKey = function createKey(name) {
-        var key = Symbol(name || 'private');
-        privateSymbols[privateSymbols.length] = key;
-        return key;
-    };
-    /**
-     * @param {object} O
-     * @returns {Array.<Symbol>}
-     */
-    getSymbolsNew = function getOwnPropertySymbols(O) {
-        var symbols = getSymbols(O),
-            p = privateSymbols.length,
-            s = symbols.length,
-            result = [],
-            r = 0,
-            j, key, symbol;
-        while (p--) {
-            key = privateSymbols[p];
-            j = 0;
-            while (j < s) {
-                symbol = symbols[j++];
-                if (symbol !== key) {
-                    result[r++] = symbol;
-                }
-            }
-        }
-        return result;
-    };
-
-    if (getDescriptors) {
-        /**
-         * @param {obejct} O
-         * @returns {object}
-         */
-        getDescriptorsNew = function getOwnPropertyDescriptors(O) {
-            var descriptors = getDescriptors(O),
-                p = privateSymbols.length,
-                key;
-            while (p--) {
-                key = privateSymbols[p];
-                if (descriptors[key]) {
-                    delete descriptors[key];
-                }
-            }
-            return descriptors;
-        };
-    } else {
-        getDescriptor = Object.getOwnPropertyDescriptor;
-        getNames = Object.getOwnPropertyNames;
-        /**
-         * @param {obejct} O
-         * @returns {object}
-         */
-        getDescriptorsNew = function getOwnPropertyDescriptors(O) {
-            var keys = concat.call(getNames(O), getSymbolsNew(O)),
-                i = 0,
-                l = keys.length,
-                result = {},
-                key, descriptor;
-            while (i < l) {
-                key = keys[i++];
-                descriptor = getDescriptor(O, key);
-                if (descriptor) {
-                    result[key] = descriptor;
-                }
-            }
-            return result;
-        };
-    }
-    defineProperties(Object, {
-        getOwnPropertyDescriptors: {
-            configurable: true,
-            writable: true,
-            value: getDescriptorsNew
-        },
-        getOwnPropertySymbols: {
-            configurable: true,
-            writable: true,
-            value: getSymbolsNew
-        }
-    });
-
-    /**
-     * @param {object} owner
-     * @returns {boolean}
-     * 
-     * @this {Symbol}
-     */
-    deletePrivateProperties = function deletePrivateProperties(owner) {
-        if (hasPrivateProperties.call(this, owner)) {
-            return delete owner[this];
-        }
-    };
-    /**
-     * @param {object} owner
-     * @returns {*}
-     * 
-     * @this {Symbol}
-     */
-    getPrivateProperties = function getPrivateProperties(owner) {
-        return hasPrivateProperties.call(this, owner) ? owner[this] : void 0;
-    };
-    /**
-     * @param {object} owner
-     * @returns {boolean}
-     * 
-     * @this {Symbol}
-     */
-    hasPrivateProperties = function hasPrivateProperties(owner) {
-        return isObject(owner) && hasOwnProperty(owner, this);
-    };
-    /**
-     * @param {object} owner
-     * @param {*} value
-     * 
-     * @this {Symbol}
-     */
-    setPrivateProperties = function setPrivateProperties(owner, value) {
-        if (isObject(owner)) {
-            defineProperty(owner, this, {
-                configurable: true,
-                value: value,
-                writable: true
-            });
-        }
-    };
-
-} else {
-
-    WeakMap_get = WeakMap.prototype.get;
-    WeakMap_set = WeakMap.prototype.set;
-
-    /**
-     * @returns {WeakMap}
-     */
-    createKey = function () {
-        return new WeakMap();
-    };
-    deletePrivateProperties = WeakMap.prototype.delete;
-    /**
-     * @param {object} owner
-     * @returns {*}
-     * 
-     * @this {WeakMap}
-     */
-    getPrivateProperties = function getPrivateProperties(owner) {
-        return hasPrivateProperties.call(this, owner) ? WeakMap_get.call(this, owner) : null;
-    };
-    hasPrivateProperties = WeakMap.prototype.has;
-    /**
-     * @param {object} owner
-     * @param {*} value
-     * 
-     * @this {WeakMap}
-     */
-    setPrivateProperties = function setPrivateProperties(owner, value) {
-        if (isObject(owner)) {
-            WeakMap_set.call(this, owner, value);
-        }
-    };
-
-}
-
-/**
- * Creates a new PrivatePropertyStore.
- * 
- * @class
- * 
- * @classdesc A dictionary that manages private properties. Key objects ("owners") are
- *   associated with their assigned values in a manner that is safe from memory leaks and
- *   prevents the values from being accessed externally (or from any PrivatePropertyStore
- *   instance other than the one used to create the association).
- * 
- * @param {string} [name] - An optional name. If the Symbol implementation is used, then this
- *   is the argument sent to the Symbol constructor for the key used by the store. If the
- *   WeakMap implementation is used, then this parameter is ignored.
- */
-function PrivatePropertyStore(name) {
-    var key;
-    if (!(this instanceof PrivatePropertyStore)) {
-        return arguments.length > 0 ? new PrivatePropertyStore(name) : new PrivatePropertyStore();
-    }
-    key = createKey(arguments.length > 0 ? name : '');
-    return defineProperties(this, {
-        'delete': {
-            value: deletePrivateProperties.bind(key)
-        },
-        get: {
-            value: getPrivateProperties.bind(key)
-        },
-        has: {
-            value: hasPrivateProperties.bind(key)
-        },
-        set: {
-            value: setPrivateProperties.bind(key)
-        }
-    });
-}
-
-module.exports = PrivatePropertyStore;
-
-},{}],16:[function(require,module,exports){
-'use strict';
-
-var common = require('./common'),
-    CustomElementDefinition = require('./custom-element-definition'),
-    CustomElementProperties = require('./custom-element-properties'),
-    PrivatePropertyStore = require('./private-property-store'),
-
-    ADOPTED_CALLBACK = common.callbackNames.adopted,
-    ATTRIBUTE_CALLBACK = common.callbackNames.attributeChanged,
-    CONNECTED_CALLBACK = common.callbackNames.connected,
-    DISCONNECTED_CALLBACK = common.callbackNames.disconnected,
-
-    getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
-    hasOwnProperty = common.hasOwnProperty,
-    isPrototypeOf = common.isPrototypeOf,
-
-    Attr = window.Attr,
-    AttrProto = Attr.prototype,
-    DocumentProto = window.Document.prototype,
-    Element = window.Element,
-    ElementProto = Element.prototype,
-    HTMLElement = window.HTMLElement,
-    MutationObserver = window.WebKitMutationObserver || window.MutationObserver,
-    MutationObserver_takeRecords = MutationObserver.prototype.takeRecords,
-    NodeProto = window.Node.prototype,
-
-    Attr_get_localName = getOwnPropertyDescriptor(hasOwnProperty(AttrProto, 'localName') ? AttrProto : NodeProto, 'localName').get,
-    Attr_get_namespaceURI = getOwnPropertyDescriptor(hasOwnProperty(AttrProto, 'namespaceURI') ? AttrProto : NodeProto, 'namespaceURI').get,
-    Attr_get_value = getOwnPropertyDescriptor(AttrProto, 'value').get,
-
-    elementTypeWithChildrenProperty = hasOwnProperty(ElementProto, 'children') ? Element : HTMLElement,
-    Element_getAttributeNS = ElementProto.getAttributeNS,
-    Element_get_attributes = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'attributes') ? ElementProto : NodeProto, 'attributes').get,
-    Element_get_children = getOwnPropertyDescriptor(elementTypeWithChildrenProperty.prototype, 'children').get,
-
-    Node_get_isConnected = getOwnPropertyDescriptor(NodeProto, 'isConnected').get,
-    Node_get_nodeType = getOwnPropertyDescriptor(NodeProto, 'nodeType').get,
-    Node_get_ownerDocument = getOwnPropertyDescriptor(NodeProto, 'ownerDocument').get,
-
-    arrayContains = common.arrayContains,
-    Array_shift = window.Array.prototype.shift,
-    DOMException = window.DOMException,
-    enabledDescriptor,
-    isDocumentReady = common.isDocumentReady,
-    setTimeout = window.setTimeout,
-    states = common.states,
-    throwAsync = common.throwAsync,
-
-    /**
-     * Indicates whether the backup element queue is currently being processed.
-     * @type {boolean}
-     */
-    processingBackupElementQueue = false,
-    /**
-     * True if either the processAttributeRecords() method or the processChildListRecords()
-     *   method is currently running; otherwise, false.
-     * @type {boolean}
-     */
-    enqueueingFromMutationObserver = false,
-    /**
-     * The backup element queue.
-     * @type {ElementQueue}
-     */
-    backupElementQueue,
-    /**
-     * The stack of all active element queues.
-     * @type {Array.<ElementQueue>}
-     */
-    elementQueues = [],
-    /**
-     * The topmost element queue in the stack, or null if no element queues
-     *   are in the stack.
-     * @type {?ElementQueue}
-     */
-    currentElementQueue = null,
-    /**
-     * A single MutationObserver that watches for changed attributes that occur
-     *   on defined custom elements.
-     * @type {MutationObserver}
-     */
-    attributeObserver,
-    /**
-     * A single MutationObserver that watches documents for connected and disconnected custom elements.
-     * @type {MutationObserver}
-     */
-    childListObserver,
-    /**
-     * The options used when adding a document to the childListObserver.
-     * @type {object}
-     */
-    childListObserverOptions = {
-        childList: true,
-        subtree: true
-    },
-    /**
-     * Contains weak references to the documents that are being observed by
-     *   the childListObserver.
-     */
-    documents = new PrivatePropertyStore('DocumentProperties'),
-    /**
-     * Contains any MutationRecords taken from the global attributeObserver which
-     *   have been suspended until there are no more element queues in the reaction
-     *   stack.
-     * @type {Array.<MutationRecord>}
-     */
-    suspendedAttributeRecords = [],
-    /**
-     * Contains any MutationRecords taken from the global childListObserver which
-     *   have been suspended until there are no more element queues in the reaction
-     *   stack.
-     * @type {Array.<MutationRecord>}
-     */
-    suspendedChildListRecords = [],
-    /**
-     * False if custom element reactions are currently prevented from being
-     *   enqueued; otherwise, true.
-     * @type {boolean}
-     */
-    reactionsEnabled = true;
-
-/**
- * Creates a new DocumentProperties instance for the specified document, and
- *   observes the document for custom element reaction triggers.
- * 
- * @class DocumentProperties
- * @classdesc Contains information about a Document.
- * 
- * @param {Document} document - The Document.
- * 
- * @property {number} throwOnDynamicMarkupInsertionCounter - A counter that
- *   is used to prevent a custom element constructor from being able to use
- *   the Document.prototype.open(), Document.prototype.close(), and
- *   Document.prototype.write() methods when the constructor is invoked by
- *   the parser.
- */
-function DocumentProperties(document) {
-    documents.set(document, this);
-    this.throwOnDynamicMarkupInsertionCounter = 0;
-    childListObserver.observe(document, childListObserverOptions);
-}
-
-/**
- * Creates a new ElementQueue.
- * 
- * @class ElementQueue
- * @classdesc Represents a queue of custom elements with pending reactions.
- * 
- * @property {Array.<CustomElementProperties>} elements - The custom elements in the queue.
- */
-function ElementQueue() {
-    this.elements = [];
-}
-/**
- * Adds a custom element to this ElementQueue.
- * 
- * @param {CustomElementProperties} props - The CustomElementProperties for
- *   the custom element to enqueue.
- */
-ElementQueue.prototype.enqueueElement = function (props) {
-    if (!enqueueingFromMutationObserver) {
-        enqueuePendingMutationRecords();
-    }
-    this.elements[this.elements.length] = props;
-};
-/**
- * Processes the elements within the element queue, invoking the reactions in
- *   the reaction queues for each element within.
- */
-ElementQueue.prototype.invoke = function () {
-
-    var elements = this.elements,
-        l = elements.length,
-        i = 0,
-        props, reactions, reaction;
-
-    enqueuePendingMutationRecords();
-
-    // HTML Standard: "Invoke custom element reactions" algorithm
-    // https://html.spec.whatwg.org/multipage/scripting.html#invoke-custom-element-reactions
-
-    // To invoke custom element reactions in an element queue `queue`, run the
-    // following steps:
-
-    // 1.   For each custom element `element` in `queue`:
-    while (i < l) {
-
-        props = elements[i++];
-
-        // 1.1.     Let `reactions` be `element`'s custom element reaction queue.
-        reactions = props.reactionQueue;
-
-        // 1.2.     Repeat until `reactions` is empty:
-        while (reactions.length > 0) {
-            // 1.2.1.   Remove the first element of `reactions`, and let `reaction`
-            //          be that element. Switch on `reaction`'s type:
-            // 
-            //          Upgrade reaction:
-            //              Upgrade `element` using `reaction`'s custom element definition.
-            // 
-            //          Callback reaction:
-            //              Invoke `reaction`'s callback function with `reaction`'s
-            //              arguments, and with `element` as the callback 'this' value.
-            // 
-            //          If this throws any exception, then report the exception.
-            reaction = Array_shift.call(reactions);
-            try {
-                reaction.apply(props);
-            } catch (ex) {
-                throwAsync(ex);
-            }
-        }
-    }
-
-    elements.length = 0;
-};
-
-/**
- * @param {MutationObserver} observer
- * @returns {Array.<MutationRecord>}
- */
-function takeRecords(observer) {
-    return MutationObserver_takeRecords.call(observer);
-}
-
-/**
- * Enqueues or suspends any pending MutationRecords, and then prevents any
- *   further custom element reactions from being enqueued until the
- *   'enableReactions' method is called.
- */
-function disableReactions() {
-    if (!reactionsEnabled) {
-        return;
-    }
-    reactionsEnabled = false;
-    if (elementQueues.length > 0) {
-        enqueuePendingMutationRecords();
-    } else {
-        suspendMutationRecords();
-    }
-}
-/**
- * Re-enables the enqueueing of all custom element reactions. If any
- *   MutationRecords were suspended when reactions were disabled, they will
- *   now be enqueued in the backup element queue.
- */
-function enableReactions() {
-    if (reactionsEnabled) {
-        return;
-    }
-    takeRecords(attributeObserver);
-    takeRecords(childListObserver);
-    reactionsEnabled = true;
-    if (elementQueues.length === 0) {
-        enqueueSuspendedMutationRecords();
-    }
-}
-
-/**
- * Adds an element to either the current element queue or the backup element
- *   queue, as necessary.
- * 
- * @param {CustomElementProperties} props - The CustomElementProperties
- *   for the custom element to enqueue.
- */
-function enqueueElement(props) {
-
-    // HTML Standard "Enqueue an element on the appropriate element queue" algorithm
-    // https://html.spec.whatwg.org/multipage/scripting.html#enqueue-an-element-on-the-appropriate-element-queue
-
-    // To enqueue an element on the appropriate element queue, given an element `element`,
-    // run the following steps:
-
-    // 1.   If the custom element reactions stack is empty, then:
-    if (!currentElementQueue) {
-
-        // 1.1.     Add `element` to the backup element queue.
-        backupElementQueue.enqueueElement(props);
-
-        // 1.2.     If the processing the backup element queue flag is set, abort this algorithm.
-        if (processingBackupElementQueue) {
-            return;
-        }
-
-        // 1.3.     Set the 'processing the backup element queue' flag.
-        processingBackupElementQueue = true;
-
-        // 1.4.     Queue a microtask to perform the following steps:
-        // 1.4.1.   Invoke custom element reactions in the backup element queue.
-        // 1.4.2.   Unset the 'processing the backup element queue flag'.
-        setTimeout(processBackupElementQueue);
-
-        return;
-    }
-
-    // 2.   Otherwise, add `element` to the current element queue.
-    currentElementQueue.enqueueElement(props);
-}
-/**
- * This method is queued as a microtask (or, for our purposes, as a timeout), and
- *   runs steps 1.4.1. and 1.4.2. from the "Enqueue an element on the appropriate
- *   element queue" algorithm.
- */
-function processBackupElementQueue() {
-    // 1.4.1.   Invoke custom element reactions in the backup element queue.
-    backupElementQueue.invoke();
-    // 1.4.2.   Unset the 'processing the backup element queue flag'.
-    processingBackupElementQueue = false;
-}
-
-/**
- * Enqueues a callback reaction on the specified element.
- * 
- * @param {HTMLElement|CustomElementProperties} element - The custom element (or the
- *   CustomElementProperties for the element) whose callback will be invoked. If an
- *   HTML element with no matching custom element definition is provided, then no
- *   action will be taken.
- * @param {string} callbackName - The name of the callback to invoke on the element.
- * @param {Array} [args] - An optional array of arguments to send to the callback.
- */
-function enqueueCallbackReaction(element, callbackName, args) {
-    var props, definition, callbacks, callback, ownerDocument, attributeName;
-
-    if (!reactionsEnabled) {
-        return;
-    }
-
-    props = CustomElementProperties.get(element)
-    if (!props || props.state === states.failed) {
-        return;
-    }
-
-    element = props.element;
-
-    // HTML Standard: "Enqueue a Custom Element Callback Reaction" algorithm
-    // https://html.spec.whatwg.org/multipage/scripting.html#enqueue-a-custom-element-callback-reaction
-
-    // To enqueue a custom element callback reaction, given a custom element `element`,
-    // a callback name `callbackName`, and a list of arguments `args`, run the following
-    // steps:
-
-    // 1.   Let `definition` be `element`'s custom element definition.
-    definition = props.definition || CustomElementDefinition.fromElement(element);
-
-    // 2.   Let `callback` be the value of the entry in `definition`'s lifecycle callbacks
-    //      with key `callbackName`.
-    callbacks = definition.callbacks;
-    callback = callbacks[callbackName];
-
-    if (definition.hasAdoptedCallback) {
-        // A quick interruption to perform some intermediate steps needed by the
-        // polyfill for definitions that contain an "adoptedCallback".
-
-        if (callbackName === ADOPTED_CALLBACK) {
-
-            // If the "adoptedCallback" is being fired, update the internal
-            // "ownerDocument" property immediately.
-            props.ownerDocument = Node_get_ownerDocument.call(props.element);
-
-        } else if (callbackName === CONNECTED_CALLBACK) {
-            ownerDocument = Node_get_ownerDocument.call(props.element);
-            if (props.ownerDocument !== ownerDocument) {
-                // If a "connectedCallback" is being fired, and the HTML element's
-                // ownerDocument is different from the one we have in its internal
-                // property set, then ensure that an adoptedCallback is enqueued before
-                // before the connectedCallback.
-                enqueueCallbackReaction(props, ADOPTED_CALLBACK, [props.ownerDocument, ownerDocument]);
-
-                // We need to do this even if the definition does not contain a
-                // connectedCallback, because elements can be adopted by a document
-                // simply by being inserted into a node that belongs to that document,
-                // without ever having explicitly invoked Document.prototype.adoptNode().
-            }
-        }
-    }
-
-    // 3.   If `callback` is null, then abort these steps.
-    if (callback == null) {
-        return;
-    }
-
-    // 4.   If `callbackName` is "attributeChangedCallback", then:
-    if (callbackName === ATTRIBUTE_CALLBACK) {
-
-        // 4.1.     Let `attributeName` be the first element of args.
-        attributeName = args[0];
-
-        // 4.2.     If `definition`'s observed attributes does not contain `attributeName`,
-        //          then abort these steps.
-        if (!arrayContains(definition.observedAttributes, attributeName)) {
-            return;
-        }
-    }
-
-    if (!enqueueingFromMutationObserver && elementQueues.length > 0) {
-        enqueuePendingMutationRecords();
-    }
-
-    // 5.   Add a new callback reaction to `element`'s custom element reaction queue,
-    //      with callback function `callback` and arguments `args`.
-    props.reactionQueue[props.reactionQueue.length] = invokeCallback.bind(null, callback, props, args);
-
-    // 6.   Enqueue an element on the appropriate element queue given `element`.
-    enqueueElement(props);
-
-}
-/**
- * Enqueues an upgrade reaction on the specified element.
- * 
- * @param {CustomElementProperties} props - The CustomElementProperties for the element
- *   that will be upgraded.
- */
-function enqueueUpgradeReaction(props) {
-    var definition;
-
-    if (!reactionsEnabled || props.upgradeEnqueued) {
-        return;
-    }
-
-    props.upgradeEnqueued = true;
-    definition = props.definition || Definition.fromElement(props.element);
-
-    if (!enqueueingFromMutationObserver && elementQueues.length > 0) {
-        enqueuePendingMutationRecords();
-    }
-
-    // HTML Standard: "Enqueue a custom element upgrade reaction" algorithm
-    // https://html.spec.whatwg.org/multipage/scripting.html#enqueue-a-custom-element-upgrade-reaction
-
-    // 1.   Add a new upgrade reaction to `element`'s custom element reaction queue,
-    //      with custom element definition `definition`.
-    props.reactionQueue[props.reactionQueue.length] = upgradeElement.bind(null, props);
-
-    // 2.   Enqueue an element on the appropriate element queue given `element`.
-    enqueueElement(props);
-}
-
-/**
- * Takes the appropriate actions for a node that was recently connected to the
- *    document, as well as for all of its descendants.
- * 
- * @param {Node} node - The node that was connected.
- * @param {Array.<CustomElementProperties>} connected - An ongoing list of custom
- *   elements for which a connectedCallback should be enqueued.
- * @param {Array.<CustomElementProperties>} upgraded - An ongoing list of custom
- *   elements that are being upgraded by the current call to
- *   enqueueChildListRecords.
- */
-function enqueueAddedNode(node, connected, upgraded) {
-    var definition, props, ownerDocument, docProps, children, l, i;
-
-    if (Node_get_nodeType.call(node) !== 1) {
-        return;
-    }
-
-    definition = CustomElementDefinition.fromElement(node);
-
-    if (definition) {
-        props = CustomElementProperties.get(node);
-        if (!props) {
-            props = new CustomElementProperties(node, definition);
-            upgraded[upgraded.length] = props;
-            ownerDocument = Node_get_ownerDocument.call(node);
-            if (!isDocumentReady(ownerDocument) && !common.usingReactionApi) {
-                docProps = documents.get(ownerDocument) || new DocumentProperties(ownerDocument);
-                if (docProps) {
-                    docProps.throwOnDynamicMarkupInsertionCounter += 1;
-                }
-                pushQueue();
-                try {
-                    upgradeElement(props, true);
-                } catch (ex) {
-                    throwAsync(ex);
-                }
-                popQueue();
-                if (docProps) {
-                    docProps.throwOnDynamicMarkupInsertionCounter -= 1;
-                }
-            } else {
-                enqueueUpgradeReaction(props);
-            }
-        } else {
-            props.parentNodeChanged = true;
-            if (props.state !== states.failed && props.state !== states.uncustomized && !arrayContains(connected, props) && !arrayContains(upgraded, props)) {
-                connected[connected.length] = props;
-            }
-        }
-    }
-
-    children = node instanceof elementTypeWithChildrenProperty ? Element_get_children.call(node) : [];
-    l = children.length;
-
-    for (i = 0; i < l; i++) {
-        enqueueAddedNode(children[i], connected, upgraded);
-    }
-}
-/**
- * Takes the appropriate actions for a node that was recently disconnected from
- *   the document, as well as for all of its descendants.
- * 
- * @param {Node} node - The node that was disconnected.
- */
-function enqueueRemovedNode(node) {
-    var props, children, l, i;
-
-    if (Node_get_nodeType.call(node) !== 1) {
-        return;
-    }
-
-    props = CustomElementProperties.get(node);
-    if (props) {
-        enqueueCallbackReaction(props, DISCONNECTED_CALLBACK);
-    }
-    if (node instanceof elementTypeWithChildrenProperty) {
-        children = Element_get_children.call(node);
-        for (i = 0, l = children.length; i < l; i++) {
-            enqueueRemovedNode(children[i]);
-        }
-    }
-}
-/**
- * Enqueues any appropriate "attributeChangedCallback" reactions based on the
- *   provided collection of MutationRecord objects.
- * 
- * @param {Array.<MutationRecord>} records - The mutation records that will
- *   be processed.
- */
-function enqueueAttributeRecords(records) {
-    var l = records.length,
-        i, record;
-    if (l === 0 || !reactionsEnabled) {
-        return;
-    }
-    enqueueingFromMutationObserver = true;
-    for (i = 0; i < l; i++) {
-        record = records[i];
-        enqueueCallbackReaction(record.target, ATTRIBUTE_CALLBACK, [
-            record.attributeName,
-            record.oldValue,
-            Element_getAttributeNS.call(record.target, record.attributeNamespace, record.attributeName),
-            record.attributeNamespace
-        ]);
-    }
-    enqueueingFromMutationObserver = false;
-}
-/**
- * Enqueues any appropriate custom element reactions based on the provided
- *   collection of MutationRecord objects.
- * 
- * @param {Array.<MutationRecord>} records - The mutation records that will
- *   be processed.
- */
-function enqueueChildListRecords(records) {
-    var l = records.length,
-        /// <var type="Array" elementType="CustomElementProperties" />
-        connected = [],
-        /// <var type="Array" elementType="CustomElementProperties" />
-        upgraded = [],
-        i, record, j, k, added, removed;
-
-    if (l === 0 || !reactionsEnabled) {
-        return;
-    }
-
-    enqueueingFromMutationObserver = true;
-
-    for (i = 0; i < l; i++) {
-        record = records[i];
-
-        // 1. Enqueue upgrade reactions for added elements that have not yet been upgraded
-        added = record.addedNodes;
-        k = added.length;
-        for (j = 0; j < k; j++) {
-            enqueueAddedNode(added[j], connected, upgraded);
-        }
-
-        // 2. Enqueue disconnectedCallbacks for removed custom elements
-        removed = record.removedNodes;
-        k = removed.length;
-        for (j = 0; j < k; j++) {
-            enqueueRemovedNode(removed[j]);
-        }
-    }
-
-    // 3. Enqueue connectedCallbacks for added elements that have already been upgraded
-    l = connected.length;
-    for (i = 0; i < l; i++) {
-        enqueueCallbackReaction(connected[i], CONNECTED_CALLBACK);
-    }
-
-    enqueueingFromMutationObserver = false;
-}
-/**
- * Takes all pending MutationRecords directly from the global attributeObserver
- *   and childListObserver, and immediately enqueues any custom element reactions
- *   derived from those records.
- */
-function enqueuePendingMutationRecords() {
-    var childListRecords = takeRecords(childListObserver),
-        c = childListRecords.length,
-        attributeRecords = takeRecords(attributeObserver),
-        a = attributeRecords.length;
-    if (c > 0) {
-        enqueueChildListRecords(childListRecords);
-    }
-    if (a > 0) {
-        enqueueAttributeRecords(attributeRecords);
-    }
-}
-/**
- * Empties the lists of suspended MutationRecords, and enqueues any custom element
- *   reactions derived from the records in those lists.
- */
-function enqueueSuspendedMutationRecords() {
-    var c = suspendedChildListRecords.length,
-        a = suspendedAttributeRecords.length;
-    if (c > 0) {
-        enqueueChildListRecords(suspendedChildListRecords);
-        suspendedChildListRecords.length = 0;
-    }
-    if (a > 0) {
-        enqueueAttributeRecords(suspendedAttributeRecords);
-        suspendedAttributeRecords.length = 0;
-    }
-}
-/**
- * Takes all pending MutationRecords from the global MutationObservers, and
- *   suspends those records until there are no more element queues in the
- *   reaction stack, when they will then be enqueued into the backup
- *   element queue.
- */
-function suspendMutationRecords() {
-    var records = takeRecords(attributeObserver),
-        l = records.length,
-        s = suspendedAttributeRecords.length,
-        i = 0;
-    while (i < l) {
-        suspendedAttributeRecords[s + i] = records[i];
-        i++;
-    }
-    records = takeRecords(childListObserver);
-    l = records.length;
-    s = suspendedChildListRecords.length;
-    i = 0;
-    while (i < l) {
-        suspendedChildListRecords[s + i] = records[i];
-        i++;
-    }
-}
-
-/**
- * Invokes the provided callback function using the provided custom element as the
- *   context ('this') object, and with optional array of arguments.
- *
- * @param {function} callback - The callback to invoke.
- * @param {CustomElementProperties} props - The CustomElementProperties of the element
- *   that will be used as the context ('this') object for the callback.
- * @param {Array} [args] - An optional array containing the arguments to send to
- *   the callback function.
- * 
- * @returns {*} The return value of the invoked callback.
- */
-function invokeCallback(callback, props, args) {
-    return callback.apply(props.element, args);
-}
-/**
- * Upgrades the specified custom element in accordance with its associated custom
- *   element definition.
- * 
- * @param {CustomElementProperties} props - The CustomElementProperties of the
- *   element that will be upgraded.
- * @param {boolean} [synchronous] - Whether or not the synchronous custom elements
- *   flag should be set during the upgrade. Defaults to false.
- */
-function upgradeElement(props, synchronous) {
-    var definition = props.definition,
-        attributes, attribute, i, l,
-        constructError, constructResult;
-
-    // HTML Standard: "Upgrade a Custom Element" algorithm
-    // https://html.spec.whatwg.org/multipage/scripting.html#concept-upgrade-an-element
-
-    // To upgrade an element, given as input a custom element definition `definition`
-    // and an element `element`, run the following steps:
-
-    // 1.   If `element` is custom, abort these steps.
-    // 2.   If `element`'s custom element state is "failed", then abort these steps.
-    if (props.state === states.custom || props.state === states.failed) {
-        return;
-    }
-
-    // 3.   For each `attribute` in `element`'s attribute list, in order, enqueue a
-    //      custom element callback reaction with `element`, callback name
-    //      "attributeChangedCallback", and an argument list containing `attribute`'s
-    //      local name, null, `attribute`'s value, and `attribute`'s namespace.
-    attributes = Element_get_attributes.call(props.element);
-    i = 0;
-    l = attributes.length;
-    while (i < l) {
-        attribute = attributes[i++];
-        enqueueCallbackReaction(props, ATTRIBUTE_CALLBACK, [
-            Attr_get_localName.call(attribute),
-            null,
-            Attr_get_value.call(attribute),
-            Attr_get_namespaceURI.call(attribute)
-        ]);
-    }
-
-    // 4.   If `element` is connected, then enqueue a custom element callback reaction
-    //      with `element`, callback name "connectedCallback", and an empty argument list.
-    if (Node_get_isConnected.call(props.element)) {
-        enqueueCallbackReaction(props, CONNECTED_CALLBACK);
-    }
-
-    // 5.   Add `element` to the end of `definition`'s construction stack.
-    definition.constructionStack.push(props);
-
-    // 6.   Let `C` be `definition`'s constructor.
-    // 7.   Let `constructResult` be Construct(`C`).
-    common.nextElementIsSynchronous = true;
-    try {
-        constructResult = definition.constructElement();
-    } catch (ex) {
-        constructError = ex;
-    }
-    common.nextElementIsSynchronous = false;
-
-    // 8.   Remove the last entry from the end of `definition`'s construction stack.
-    definition.constructionStack.pop();
-
-    // 9.   If `constructResult` is an abrupt completion, then:
-    if (constructError) {
-
-        // 9.1.     Set `element`'s custom element state to "failed".
-        props.state = STATES.FAILED;
-
-        // 9.2.     Return `constructResult` (i.e., rethrow the exception), and terminate
-        //          these steps.
-        throw constructError;
-    }
-
-    // 10.  If SameValue(constructResult.[[value]], `element`) is false, then throw an
-    //      "InvalidStateError" DOMException and terminate these steps.
-    if (constructResult !== props.element) {
-        throw new DOMException("Custom element constructors cannot return a different object.", 'InvalidStateError');
-    }
-
-    // 11.  Set `element`'s custom element state to "custom".
-    // 12.  Set `element`'s custom element definition to `definition`.
-    definition.finalizeElement(props);
-}
-
-/**
- * Ensures that the provided Document (or the ownerDocument of the provided Node)
- *   is being watched for connected and disconnected custom elements, and that its
- *   'throw on dynamic markup insertion counter' has been initialized.
- * 
- * @param {Node|Document} node - The document to observe, or the Node whose
- *   ownerDocument should be observed.
- * 
- * @returns {?DocumentProperties} The DocumentProperties for the document, containing
- *   its 'throw on dynamic markup insertion' counter. Returns null if no document
- *   could be derived from the parameter.
- */
-function observeDocument(node) {
-    var document;
-    if (isPrototypeOf(DocumentProto, node)) {
-        document = node;
-    } else if (isPrototypeOf(NodeProto, node)) {
-        document = Node_get_ownerDocument.call(node);
-    }
-    if (!document) {
-        return null;
-    }
-    return documents.get(document) || new DocumentProperties(document);
-}
-/**
- * Watches the provided custom element for attribute changes.
- * 
- * @param {HTMLElement|CustomElementProperties} element - The custom element (or the
- *   CustomElementProperties for the element) to observe.
- */
-function observeElement(element) {
-    var props = CustomElementProperties.get(element),
-        definition = props ? props.definition : null;
-    if (!definition || definition.observedAttributes.length < 1) {
-        return;
-    }
-    attributeObserver.observe(props.element, {
-        attributes: true,
-        attributeOldValue: true,
-        attributeFilter: definition.observedAttributes
-    });
-}
-/**
- * Pops the current element queue off of the reaction stack and invokes the
- *   enqueued reactions for all elements within it.
- */
-function popQueue() {
-    var l = elementQueues.length,
-        queue;
-
-    if (l > 0) {
-        enqueuePendingMutationRecords();
-        queue = elementQueues[--l];
-        elementQueues.length = l;
-        currentElementQueue = l > 0 ? elementQueues[l - 1] : null;
-        queue.invoke();
-        if (l < 1) {
-            // If the reaction stack has no more element queues, then enqueue any
-            // MutationRecords that were suspended previously.
-            enqueueSuspendedMutationRecords();
-        }
-    }
-}
-/**
- * Adds a new element queue to the end of the reaction stack.
- */
-function pushQueue() {
-    var queue = new ElementQueue(),
-        l = elementQueues.length;
-
-    if (l === 0) {
-        suspendMutationRecords();
-    } else {
-        enqueuePendingMutationRecords();
-    }
-
-    elementQueues[l] = queue;
-    currentElementQueue = queue;
-}
-
-backupElementQueue = new ElementQueue();
-attributeObserver = new MutationObserver(enqueueAttributeRecords);
-childListObserver = new MutationObserver(enqueueChildListRecords);
-
-enabledDescriptor = {
-    get: function () {
-        return reactionsEnabled;
-    },
-    set: function (value) {
-        value = !!value;
-        if (value === reactionsEnabled) {
-            return;
-        }
-        value ? enableReactions() : disableReactions();
-    }
-};
-
-Object.defineProperty(common, 'reactionsEnabled', enabledDescriptor);
-
-module.exports = Object.defineProperties({}, {
-    enabled: enabledDescriptor,
-
-    enqueueCallbackReaction: {
-        value: enqueueCallbackReaction
-    },
-    enqueueUpgradeReaction: {
-        value: enqueueUpgradeReaction
-    },
-
-    observeDocument: {
-        value: observeDocument
-    },
-    observeElement: {
-        value: observeElement
-    },
-    popQueue: {
-        value: popQueue
-    },
-    pushQueue: {
-        value: pushQueue
-    },
-
-    upgradeElement: upgradeElement
-});
-
-},{"./common":4,"./custom-element-definition":7,"./custom-element-properties":8,"./private-property-store":15}],17:[function(require,module,exports){
-'use strict';
-
-var common = require('./common'),
-    createElementInternal = require('./create-element'),
-    CustomElementDefinition = require('./custom-element-definition'),
-    CustomElementProperties = require('./custom-element-properties'),
-    reactions = require('./reactions'),
-
-    DocumentProto = window.Document.prototype,
-    ElementProto = window.Element.prototype,
-    HTMLDocumentProto = window.HTMLDocument.prototype,
-    HTMLElementProto = window.HTMLElement.prototype,
-    Object = window.Object,
-    NodeProto = window.Node.prototype,
-    String = window.String,
-
-    defineProperties = Object.defineProperties,
-    defineProperty = Object.defineProperty,
-    getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
-    getOwnPropertyNames = Object.getOwnPropertyNames,
-    hasOwnProperty = common.hasOwnProperty,
-    isPrototypeOf = common.isPrototypeOf,
-
-    Document_adoptNode = DocumentProto.adoptNode,
-    Document_close = DocumentProto.close,
-    Document_createElement = DocumentProto.createElement,
-    Document_createElementNS = DocumentProto.createElementNS,
-    Document_importNode = DocumentProto.importNode,
-    Document_open = DocumentProto.open,
-    Document_write = DocumentProto.write,
-    Document_writeln = DocumentProto.writeln,
-
-    Element_getAttributeNS = ElementProto.getAttributeNS,
-    Element_setAttributeNode = ElementProto.setAttributeNode,
-    Element_get_attributes = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'attributes') ? ElementProto : NodeProto, 'attributes').get,
-    Element_get_localName = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'localName') ? ElementProto : NodeProto, 'localName').get,
-    Element_get_namespaceURI = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'namespaceURI') ? ElementProto : NodeProto, 'namespaceURI').get,
-
-    Node_appendChild = NodeProto.appendChild,
-    Node_cloneNode = NodeProto.cloneNode,
-    Node_get_childNodes = getOwnPropertyDescriptor(NodeProto, 'childNodes').get,
-    Node_get_isConnected = getOwnPropertyDescriptor(NodeProto, 'isConnected').get,
-    Node_get_ownerDocument = getOwnPropertyDescriptor(NodeProto, 'ownerDocument').get,
-    Node_get_parentNode = getOwnPropertyDescriptor(NodeProto, 'parentNode').get,
-    Node_get_nodeType = getOwnPropertyDescriptor(NodeProto, 'nodeType').get,
-
-    String_split = String.prototype.split,
-
-    ADOPTED_CALLBACK = common.callbackNames.adopted,
-    arrayFrom = Array.from,
-    DOMException = window.DOMException,
-    HTML_NAMESPACE = common.htmlNamespace,
-    isArray = Array.isArray,
-    shimMap = new WeakMap(),
-    TypeError = window.TypeError,
-    undefined = void 0;
-
-/**
- * @param {Node} node
- * @param {Document} doc
- * @param {boolean} [deep]
- * @param {?number} [nodeType]
- * @returns {Node}
- */
-function cloneNode(node, doc, deep, nodeType) {
-    // 'nodeType' may be passed as an optimization to skip the 'instanceof HTMLElement'
-    // test if we've already checked its nodeType (and verified that it is not 1).
-    var localName, namespace, is, definition, copy, attributes, children, i, l,
-        couldBeElement = (nodeType == null || nodeType === 1),
-        isHtmlElement = couldBeElement ? isPrototypeOf(HTMLElementProto, node) : false,
-        isElement = isHtmlElement ? true : (nodeType === 1 ? true : (couldBeElement ? isPrototypeOf(ElementProto, node) : false)),
-        isDocument = isElement ? false : (nodeType === 9 || (nodeType == null && isPrototypeOf(DocumentProto, node)));
-
-    // DOM Standard: "Clone a node" algorithm
-    // https://dom.spec.whatwg.org/#concept-node-clone
-
-    // To clone a `node`, with an optional `document` and `clone children flag`, run these steps:
-
-    //  1.  If `document` is not given, let `document` be `node`'s node document.
-    if (!doc) {
-        doc = Node_get_ownerDocument.call(node);
-    }
-
-    if (isElement) {
-        //  2.      If `node` is an element, then:
-        //  2.1.    Let `copy` be the result of creating an element, given `document`, `node`'s local name,
-        //          `node`'s namespace, `node`'s namespace prefix, and the value of `node`'s "is" attribute
-        //          if present (or null if not). The synchronous custom elements flag should be unset.
-        //  2.2.    For each `attribute` in `node`'s attribute list:
-        //  2.2.1.      Let `copyAttribute` be a clone of `attribute`.
-        //  2.2.2.      Append `copyAttribute` to `copy`.
-
-        // Step 2.2. is only performed for custom elements, since non-custom elements
-        // are sent to the native Node.prototype.cloneNode.
-
-        if (isHtmlElement) {
-            localName = Element_get_localName.call(node);
-            namespace = Element_get_namespaceURI.call(node);
-            is = Element_getAttributeNS.call(node, null, 'is') || null;
-            definition = CustomElementDefinition.lookup(doc, namespace, localName, is);
-        }
-        if (definition) {
-            // Invoke the "create an element" algorithm if `node` is a custom element.
-            // We can safely pass the "prefix" argument as null, since we know we're
-            // creating a custom element in this case.
-            copy = createElementInternal(doc, localName, namespace, null, is, false, definition);
-            attributes = Element_get_attributes.call(copy);
-            for (i = 0, l = attributes.length; i < l; i++) {
-                Element_setAttributeNode.call(copy, Node_cloneNode.call(attributes[i]));
-            }
-        } else {
-            copy = Node_cloneNode.call(node, false);
-        }
-    } else {
-        //  3.  Otherwise, let `copy` be a node that implements the same interfaces as `node`,
-        //      and fulfills these additional requirements, switching on `node`:
-
-        // Requirements omitted. If `node` is not an Element, then we simply defer to the
-        // native Node.prototype.cloneNode().
-        copy = Node_cloneNode.call(node, false);
-    }
-
-    //  4.  Set `copy`'s node document and `document` to `copy`, if `copy` is a document, and
-    //      set `copy`'s node document to `document` otherwise.
-    if (isDocument) {
-        doc = copy;
-    }
-
-    //  5.  Run any cloning steps defined for `node` in other applicable specifications and
-    //      pass `copy`, `node`, `document` and the `clone children flag` if set, as parameters.
-
-    if (deep) {
-        //  6.  If the `clone children flag` is set, clone all the children of `node` and append
-        //      them to `copy`, with `document` as specified and the `clone children flag` being set.
-        children = Node_get_childNodes.call(node);
-        for (i = 0, l = children.length; i < l; i++) {
-            Node_appendChild.call(copy, cloneNode(children[i], doc, true));
-        }
-    }
-
-    //  7.  Return `copy`.
-    return copy;
-}
-
-/**
- * @param {string} method
- * @returns {string}
- */
-function getDocumentMarkupInsertionError(method) {
-    return "Failed to execute '" + method + "' on 'Document': " + method + "() may not be invoked on a Document from within the constructor of a custom element belonging to that Document.";
-}
-
-/**
- * @param {object} target
- * @returns {object}
- */
-function getShimmedPropertyNames(target) {
-    var names = shimMap.get(target);
-    if (!names) {
-        names = {};
-        shimMap.set(target, names);
-    }
-    return names;
-}
-/**
- * @param {object} thisArg
- * @param {Array} args
- */
-function observeInvolvedDocuments(thisArg, args) {
-    var i = args.length;
-    reactions.observeDocument(thisArg);
-    while (i--) {
-        reactions.observeDocument(args[i]);
-    }
-}
-
-function beginReactionShim() {
-    common.incrementShimStack();
-    reactions.pushQueue();
-}
-function endReactionShim() {
-    reactions.popQueue();
-    common.decrementShimStack();
-}
-
-/**
- * @param {function} method
- * @param {object} thisArg
- * @param {Array} args
- */
-function invokeShim(method, thisArg, args) {
-    observeInvolvedDocuments(thisArg, args);
-    beginReactionShim();
-    try {
-        return method.apply(thisArg, args);
-    } finally {
-        endReactionShim();
-    }
-}
-
-/**
- * @param {object} target
- * @param {string} name
- * @param {function|object} [customShim]
- * @param {object} [shimmedProps]
- */
-function shimMember(target, name, customShim, shimmedProps) {
-    var descriptor = getOwnPropertyDescriptor(target, name),
-        isDataDescriptor = descriptor && hasOwnProperty(descriptor, 'value'),
-        oldMethod = descriptor && (isDataDescriptor ? descriptor.value : descriptor.set),
-        newDescriptor, newGetter, newMethod;
-
-    if (!descriptor || !descriptor.configurable || (isDataDescriptor && typeof oldMethod !== 'function')) {
-        // Abort if the property is not found or is not configurable.
-        // Data descriptors with non-function values don't need to be shimmed, and neither
-        // do accessor descriptors with no setter methods.
-        return;
-    }
-
-    if (!shimmedProps) {
-        shimmedProps = getShimmedPropertyNames(target);
-        if (hasOwnProperty(shimmedProps, name)) {
-            // If the member has already been shimmed, then abort.
-            return;
-        }
-    }
-    shimmedProps[name] = true;
-
-    newDescriptor = {
-        configurable: true,
-        enumerable: descriptor.enumerable
-    };
-    if (customShim && typeof customShim !== 'function') {
-        if (typeof customShim.get === 'function') {
-            newGetter = customShim.get;
-        }
-        customShim = (typeof customShim.set === 'function') ? customShim.set : null;
-    }
-
-    if (oldMethod) {
-        newMethod = (function () {
-            var invoke = invokeShim.bind(null, (customShim || oldMethod));
-            return function () {
-                return invoke(this, arrayFrom(arguments));
-            };
-        })();
-    }
-
-    if (isDataDescriptor) {
-        newDescriptor.value = newMethod;
-        newDescriptor.writable = descriptor.writable;
-    } else {
-        newDescriptor.get = newGetter || descriptor.get;
-        if (newMethod) {
-            newDescriptor.set = newMethod;
-        }
-    }
-
-    defineProperty(target, name, newDescriptor);
-}
-/**
- * @param {object} target
- * @param {Array.<string>|object} properties
- */
-function shimMembers(target, properties) {
-    var names, name, shim, shimmedProps, i, l;
-
-    if (isArray(properties)) {
-        i = properties.length;
-        while (i--) {
-            shimMember(target, String(properties[i]));
-        }
-        return;
-    }
-
-    properties = Object(properties);
-    names = getOwnPropertyNames(properties);
-    shimmedProps = getShimmedPropertyNames(target);
-    i = 0;
-    l = names.length;
-    while (i < l) {
-        name = names[i++];
-        shim = properties[name];
-        if (hasOwnProperty(target, name) && !hasOwnProperty(shimmedProps, name) && (typeof shim === 'function' || (shim && typeof shim.get === 'function' || typeof shim.set === 'function'))) {
-            shimMember(target, name, shim, shimmedProps);
-        }
-    }
-}
-
-/**
- * Shims the method or property on the specified target object with the provided
- *   name to allow it to trigger custom element reactions in accordance with the
- *   [CEReactions] WebIDL extended attribute.
- * 
- * @param {object|function} target - The target object whose method or property
- *   will be shimmed, or the constructor function whose prototype method or
- *   property will be shimmed.
- * @param {string|object} property - The name of a property or method to shim,
- *   or an object where each property is a property name, and each value is a
- *   custom shim for that property (either a function or an object with 'get' and
- *   'set' function properties).
- * @param {...string|object} [properties...]
- */
-function shim() {
-    var l = arguments.length,
-        i = 1,
-        members = [],
-        m = 0,
-        target, arg, member;
-
-    if (l < 2) {
-        return;
-    }
-    target = arguments[0];
-    if (typeof target === 'function') {
-        target = target.prototype;
-    }
-    if (target == null || typeof target !== 'object') {
-        return;
-    }
-
-    while (i < l) {
-        arg = arguments[i++];
-        if (arg != null && typeof arg === 'object') {
-            shimMembers(target, arg);
-        } else {
-            member = String(arg || '');
-            if (member) {
-                members[m++] = member;
-            }
-        }
-    }
-    shimMembers(target, members);
-}
-
-shim(window.CharacterData,
-    'after', 'before', 'remove', 'replaceWith');
-shim(DocumentProto,
-    'alinkColor', 'append', 'bgColor', 'body', 'designMode', 'dir', 'execCommand', 'fgColor', 'linkColor',
-    'prepend', 'title', 'vlinkColor',
-    {
-        adoptNode: function adoptNode(node) {
-            var currentDocument = Node_get_ownerDocument.call(node),
-                oldDocument = isPrototypeOf(NodeProto, node) ? currentDocument : null,
-                result = Document_adoptNode.apply(this, arrayFrom(arguments));
-            if (currentDocument === this && this !== oldDocument) {
-                reactions.enqueueCallbackReaction(node, ADOPTED_CALLBACK, [oldDocument, this]);
-            }
-            return result;
-        },
-        close: function close() {
-            var docProps = reactions.observeDocument(this);
-            if (docProps && docProps.throwOnDynamicMarkupInsertionCounter > 0) {
-                throw new DOMException(getDocumentMarkupInsertionError('close'), 'InvalidStateError');
-            }
-            return Document_close.apply(this, arrayFrom(arguments));
-        },
-        createElement: function createElement(tagName, options) {
-            var isHtmlDocument = isPrototypeOf(HTMLDocumentProto, this),
-                localName, is, element;
-            if (isHtmlDocument) {
-                reactions.observeDocument(this);
-            }
-            if (!isHtmlDocument || arguments.length === 0) {
-                return Document_createElement.apply(this, arrayFrom(arguments));
-            }
-            localName = String(tagName);
-            options = options == null ? null : options.valueOf();
-            if (options != null) {
-                is = String(options instanceof Object && options.is !== undefined ? options.is : options);
-            }
-            beginReactionShim();
-            element = createElementInternal(this, localName, HTML_NAMESPACE, null, is, true, null, Document_createElement, this, arguments);
-            endReactionShim();
-            return element;
-        },
-        createElementNS: function createElementNS(namespaceURI, qualifiedName, options) {
-            var isHtmlDocument = isPrototypeOf(HTMLDocumentProto, this),
-                name = String(qualifiedName),
-                parts = String_split.call(name, ':'),
-                l = parts.length,
-                localName = parts[l > 1 ? 1 : 0],
-                prefix = l > 1 ? parts[0] : null,
-                is, element;
-            if (isHtmlDocument) {
-                reactions.observeDocument(this);
-            }
-            if (!isHtmlDocument || arguments.length < 2 || parts.length > 2) {
-                return Document_createElementNS.apply(this, arrayFrom(arguments));
-            }
-            options = options == null ? null : options.valueOf();
-            if (options != null) {
-                is = String(options instanceof Object && options.is !== undefined ? options.is : options);
-            }
-            beginReactionShim();
-            element = createElementInternal(this, localName, namespaceURI, prefix, is, true, null, Document_createElementNS, this, arguments);
-            endReactionShim();
-            return element;
-        },
-        importNode: function importNode(node, deep) {
-            var isNode = isPrototypeOf(DocumentProto, this) && isPrototypeOf(NodeProto, node),
-                nodeType = isNode ? Node_get_nodeType.call(node) : null;
-
-            // importNode works similarly to Node.prototype.cloneNode, with two extra stipulations:
-            //  1. The resulting node's ownerDocument must be the current context object
-            //  2. The `node` parameter may not be a Document node (nodeType 9), nor may it be
-            //     a shadow root (nodeType 11).
-            if (nodeType == null || nodeType === 9 || nodeType === 11) {
-                return Document_importNode.apply(this, arrayFrom(arguments));
-            }
-            return cloneNode(node, this, deep, nodeType);
-        },
-        open: function open() {
-            var docProps;
-            if (args.length > 2) {
-                // Defer to the native Document.prototype.open(). When called with 3 arguments, it
-                // should instead act as an alias for Window.prototype.open().
-                return Document_open.apply(this, arrayFrom(arguments));
-            }
-            docProps = reactions.observeDocument(this);
-            if (docProps && docProps.throwOnDynamicMarkupInsertionCounter > 0) {
-                throw new DOMException(getDocumentMarkupInsertionError('open'), 'InvalidStateError');
-            }
-            return Document_open.apply(this, arrayFrom(arguments));
-        },
-        write: function write() {
-            var docProps = reactions.observeDocument(this);
-            if (docProps && docProps.throwOnDynamicMarkupInsertionCounter > 0) {
-                throw new DOMException(getDocumentMarkupInsertionError('write'), 'InvalidStateError');
-            }
-            return Document_write.apply(this, arrayFrom(arguments));
-        },
-        writeln: function writeln() {
-            var docProps = reactions.observeDocument(this);
-            if (docProps && docProps.throwOnDynamicMarkupInsertionCounter > 0) {
-                throw new DOMException(getDocumentMarkupInsertionError('writeln'), 'InvalidStateError');
-            }
-            return Document_writeln.apply(this, arrayFrom(arguments));
-        }
-    });
-shim(window.DocumentFragment,
-    'append', 'prepend');
-shim(window.DocumentType,
-    'after', 'before', 'remove', 'replaceWith');
-shim(window.DOMTokenList,
-    'add', 'remove', 'replace', 'toggle', 'value');
-shim(ElementProto,
-    'after', 'append', 'before', 'prepend', 'remove', 'removeAttribute', 'removeAttributeNS', 'replaceWith',
-    'setAttribute', 'setAttributeNS', 'setAttributeNode', 'setAttributeNodeNS', 'slot', 'removeAttributeNode',
-    'insertAdjacentElement');
-// The properties and methods shimmed in the next statement are supposed to belong
-// to Element.prototype according to the specification, but in IE 11 they belong to
-// HTMLElement.prototype instead.
-shim(hasOwnProperty(ElementProto, 'id') ? ElementProto : HTMLElementProto,
-    'children', 'classList', 'className', 'id');
-shim(window.NamedNodeMap,
-    'setNamedItem', 'setNamedItemNS', 'removeNamedItem', 'removeNamedItemNS');
-shim(NodeProto, 'appendChild', 'insertBefore', 'nodeValue', 'normalize', 'removeChild', 'replaceChild',
-    'textContent',
-    {
-        cloneNode: function cloneNode(deep) {
-            var isNode = isPrototypeOf(NodeProto, this),
-                nodeType = isNode ? Node_get_nodeType.call(this) : null;
-            if (nodeType == null || nodeType === 11) {
-                // A nodeType of 11 indicates a shadow root, which can't be cloned. In cases
-                // where a shadow root is passed, we defer to the native Node.prototype.cloneNode()
-                // to come up with the error.
-                return Node_cloneNode.apply(this, arrayFrom(arguments));
-            }
-            return cloneNode(this, null, deep, nodeType);
-        }
-    });
-shim(window.Range,
-    'cloneContents', 'deleteContents', 'extractContents', 'insertNode', 'surroundContents');
-
-// Read-only properties of Node.prototype with new behavior
-defineProperties(NodeProto, {
-    isConnected: {
-        configurable: true,
-        enumerable: true,
-        get: function () {
-            var props;
-            if (!isPrototypeOf(NodeProto, this)) {
-                throw new TypeError(common.illegalInvocation);
-            }
-            props = CustomElementProperties.get(this);
-            return (props && props.checkingConformance && !props.parentNodeChanged) ? false : Node_get_isConnected.call(this);
-        }
-    },
-    parentNode: {
-        configurable: true,
-        enumerable: true,
-        get: function () {
-            var props = CustomElementProperties.get(this);
-            if (props && props.checkingConformance && !props.parentNodeChanged) {
-                return null;
-            }
-            return Node_get_parentNode.call(this);
-        }
-    }
-});
-// IE 11 mistakenly defines "parentElement" on HTMLElement.prototype instead of Node.prototype
-defineProperty(hasOwnProperty(HTMLElementProto, 'parentElement') ? HTMLElementProto : NodeProto, 'parentElement', {
-    configurable: true,
-    enumerable: true,
-    get: function () {
-        var props, parentNode;
-        if (!isPrototypeOf(NodeProto, this)) {
-            throw new TypeError(common.illegalInvocation);
-        }
-        props = CustomElementProperties.get(this);
-        if (props && props.checkingConformance && !props.parentNodeChanged) {
-            return null;
-        }
-        parentNode = Node_get_parentNode.call(this);
-        return parentNode instanceof Element ? parentNode : null;
-    }
-});
-
-shim(window.HTMLAnchorElement,
-    'coords', 'charset', 'download', 'hreflang', 'name', 'ping', 'referrerPolicy', 'rel', 'relList', 'rev',
-    'shape', 'target', 'text', 'type',
-    // The remaining members are part of the HTMLHyperlinkElementUtils interface
-    'hash', 'host', 'hostname', 'href', 'password', 'pathname', 'port', 'protocol', 'search', 'username');
-shim(window.HTMLAreaElement,
-    'alt', 'coords', 'download', 'ping', 'referrerPolicy', 'rel', 'relList', 'shape', 'target',
-    // The remaining members are part of the HTMLHyperlinkElementUtils interface
-    'hash', 'host', 'hostname', 'href', 'password', 'pathname', 'peort', 'protocol', 'search', 'username');
-shim(window.HTMLBaseElement,
-    'href', 'target');
-shim(window.HTMLBodyElement,
-    'background', 'bgColor', 'aLink', 'link', 'text', 'vLink');
-shim(window.HTMLButtonElement,
-    'autofocus', 'disabled', 'formAction', 'formEnctype', 'formMethod', 'formNoValidate', 'formTarget',
-    'menu', 'name', 'type', 'value');
-shim(window.HTMLCanvasElement,
-    'height', 'width');
-shim(window.HTMLDetailsElement,
-    'open');
-shim(window.HTMLDialogElement,
-    'close', 'open', 'show', 'showModal');
-shim(window.HTMLDivElement,
-    'align');
-shim(HTMLElementProto,
-    'accessKey', 'contentEditable', 'contextMenu', 'dir', 'draggable', 'dropzone', 'hidden', 'innerText',
-    'lang', 'spellcheck', 'tabIndex', 'title', 'translate');
-shim(window.HTMLEmbedElement,
-    'align', 'name');
-shim(window.HTMLFieldSetElement,
-    'disabled', 'name');
-shim(window.HTMLFontElement,
-    'color', 'face', 'size');
-shim(window.HTMLFormElement,
-    'acceptCharset', 'action', 'autocomplete', 'encoding', 'enctype', 'method', 'name', 'noValidate', 'reset',
-    'target');
-shim(window.HTMLFrameElement,
-    'cols', 'rows');
-shim(window.HTMLFrameSetElement,
-    'frameBorder', 'longDesc', 'marginHeight', 'marginWidth', 'name', 'noResize', 'scrolling', 'src');
-shim(window.HTMLHRElement,
-    'align', 'color', 'noShade', 'size', 'width');
-shim(window.HTMLIFrameElement,
-    'align', 'allowFullscreen', 'allowPaymentRequest', 'allowUserMedia', 'frameBorder', 'height', 'longDesc',
-    'marginHeight', 'marginWidth', 'name', 'referrerPolicy', 'sandbox', 'scrolling', 'src', 'srcdoc', 'width');
-// Image extends HTMLImageElement, and doesn't have any [CEReactions] members of its own
-shim(window.HTMLImageElement,
-    'align', 'alt', 'border', 'crossOrigin', 'height', 'hspace', 'isMap', 'longDesc', 'lowsrc', 'name',
-    'referrerPolicy', 'sizes', 'src', 'srcset', 'useMap', 'vspace', 'width');
-shim(window.HTMLInputElement,
-    'accept', 'alt', 'autocomplete', 'autofocus', 'defaultChecked', 'defaultValue', 'dirName', 'disabled',
-    'formAction', 'formEnctype', 'formMethod', 'formNoValidate', 'formTarget', 'height', 'inputMode', 'max',
-    'maxLength', 'min', 'minLength', 'multiple', 'name', 'pattern', 'placeholder', 'readOnly', 'required',
-    'size', 'src', 'step', 'type', 'value', 'width');
-shim(window.HTMLLegendElement,
-    'align');
-shim(window.HTMLLIElement,
-    'value');
-shim(window.HTMLLinkElement,
-    'as', 'charset', 'crossOrigin', 'href', 'hreflang', 'integrity', 'media', 'nonce', 'referrerPolicy', 'rel',
-    'relList', 'rev', 'target', 'type', 'sizes');
-shim(window.HTMLMapElement,
-    'name');
-shim(window.HTMLMarqueeElement,
-    'behavior', 'bgColor', 'direction', 'height', 'hspace', 'loop', 'scrollAmount', 'scrollDelay', 'trueSpeed',
-    'vspace', 'width');
-shim(window.HTMLMediaElement,
-    'autoplay', 'controls', 'crossOrigin', 'defaultMuted', 'loop', 'preload', 'src');
-shim(window.HTMLMenuElement,
-    'label', 'type');
-shim(window.HTMLMenuItemElement,
-    'checked', 'default', 'disabled', 'icon', 'label', 'radiogroup', 'type');
-shim(window.HTMLMetaElement,
-    'scheme');
-shim(window.HTMLMeterElement,
-    'high', 'low', 'max', 'min', 'optimum', 'value');
-shim(window.HTMLModElement,
-    'cite', 'dateTime');
-shim(window.HTMLObjectElement,
-    'align', 'archive', 'border', 'code', 'codeBase', 'codeType', 'data', 'declare', 'height', 'hspace', 'name',
-    'standby', 'type', 'typeMustMatch', 'useMap', 'vspace', 'width')
-shim(window.HTMLOListElement,
-    'reversed', 'start', 'type');
-shim(window.HTMLOptGroupElement,
-    'disabled', 'label');
-shim(window.HTMLOptionElement,
-    'defaultSelected', 'disabled', 'label', 'text', 'value');
-shim(window.HTMLOptionsCollection,
-    'add', 'length', 'remove');
-shim(window.HTMLOutputElement,
-    'defaultValue', 'htmlFor', 'name', 'value');
-shim(window.HTMLParagraphElement,
-    'align');
-shim(window.HTMLParamElement,
-    'name', 'type', 'value', 'valueType');
-shim(window.HTMLQuoteElement,
-    'cite');
-shim(window.HTMLScriptElement,
-    'async', 'charset', 'crossOrigin', 'defer', 'event', 'htmlFor', 'integrity', 'noModule', 'nonce', 'src',
-    'text', 'type');
-shim(window.HTMLSelectElement,
-    'add', 'autocomplete', 'autofocus', 'disabled', 'length', 'multiple', 'name', 'remove', 'required', 'size');
-shim(window.HTMLSlotElement,
-    'name');
-shim(window.HTMLSourceElement,
-    'media', 'sizes', 'src', 'srcset', 'type');
-shim(window.HTMLStyleElement,
-    'media', 'nonce', 'type');
-shim(window.HTMLTableCaptionElement,
-    'align');
-shim(window.HTMLTableCellElement,
-    'align', 'axis', 'abbr', 'bgColor', 'ch', 'chOff', 'colSpan', 'headers', 'height', 'noWrap', 'rowSpan', 'scope',
-    'vAlign', 'width');
-shim(window.HTMLTableColElement,
-    'align', 'ch', 'chOff', 'span', 'vAlign', 'width');
-shim(window.HTMLTableElement,
-    'align', 'bgColor', 'border', 'caption', 'cellPadding', 'cellSpacing', 'deleteCaption', 'deleteTFoot',
-    'deleteTHead', 'deleteRow', 'frame', 'rules', 'summary', 'tHead', 'tFoot', 'width');
-shim(window.HTMLTableRowElement,
-    'align', 'bgColor', 'ch', 'chOff', 'vAlign');
-shim(window.HTMLTableSectionElement,
-    'align', 'ch', 'chOff', 'deleteRow', 'vAlign');
-shim(window.HTMLTextAreaElement,
-    'autocomplete', 'autofocus', 'cols', 'defaultValue', 'dirName', 'disabled', 'inputMode', 'maxLength', 'minLength',
-    'name', 'placeholder', 'readOnly', 'required', 'rows', 'value', 'wrap');
-shim(window.HTMLTimeElement,
-    'dateTime');
-shim(window.HTMLTitleElement,
-    'text');
-shim(window.HTMLTrackElement,
-    'default', 'kind', 'label', 'src', 'srclang');
-shim(window.HTMLVideoElement,
-    'height', 'playsInline', 'poster', 'width');
-
-module.exports = {
-    shim: shim
-};
-
-},{"./common":4,"./create-element":6,"./custom-element-definition":7,"./custom-element-properties":8,"./reactions":16}],18:[function(require,module,exports){
+!function e(t,n,o){function r(l,a){if(!n[l]){if(!t[l]){var s="function"==typeof require&&require;if(!a&&s)return s(l,!0);if(i)return i(l,!0);var c=new Error("Cannot find module '"+l+"'");throw c.code="MODULE_NOT_FOUND",c}var u=n[l]={exports:{}};t[l][0].call(u.exports,function(e){var n=t[l][1][e];return r(n||e)},u,u.exports,e,t,n,o)}return n[l].exports}for(var i="function"==typeof require&&require,l=0;l<o.length;l++)r(o[l]);return r}({1:[function(e,t,n){(function(n){!function(n,o){"use strict";e("./lib/other-polyfills/Array.from"),e("./lib/other-polyfills/DOMException");var r,i,l,a,s,c,u,m,d,p,f,h=e("./lib/common"),w=Object.getOwnPropertyDescriptor,g={},y=Array.from,E=Object.defineProperty,b=Object.defineProperties,v=n.document,C=(n.EventTarget||n.Node).prototype,T=h.isDocumentReady,D=h.isPrototypeOf,N=n.Node.prototype,O=N.compareDocumentPosition,M=w(N,"ownerDocument").get,x=w(N,"isConnected"),F=n.TypeError;if(l=e("./lib/classes"),s=e("./lib/is-valid-custom-element-name"),c=e("./lib/native-custom-elements"),t.exports=b(g,{isValidCustomElementName:{enumerable:!0,value:s},support:{enumerable:!0,value:b({},{autonomousCustomElements:{enumerable:!0,value:!!c},classes:{enumerable:!0,value:h.supportsClasses},customizedBuiltInElements:{enumerable:!0,value:null!=c&&c.canExtend}})},version:{enumerable:!0,value:"0.9.0"}}),n.customElementsPolyfill=g,x&&"function"==typeof x.get||E(N,"isConnected",{configurable:!0,enumerable:!0,get:function(){var e;if(!D(N,this))throw new F(h.illegalInvocation);return(e=M.call(this))&&!!(16&O.call(e,this))}}),c&&c.canExtend)return c.prototype.define=function(e,t,n){var o=y(arguments);return arguments.length>1&&(o[1]=l.proxy(t)),c.define.apply(this,o)},void E(g,"shim",{enumerable:!0,value:function(){}});r=e("./lib/base-element-constructor"),i=e("./lib/built-in-elements"),u=e("./lib/reactions"),function(){var e,t,o,a=i.interfaceNames,s=0,u=a.length,m=n.HTMLElement;for(n.HTMLElement=l.proxy(m,c?n.HTMLElement:function(){return r.call(this,m)});s<u;)e=a[s++],t=i.constructorFromInterfaceName(e),o=c&&c.canExtend?t:function(e){return function(){return r.call(this,e)}}(t),n[e]=l.proxy(t,o)}(),a=e("./lib/custom-element-registry"),m=e("./lib/shims"),f=new a,b(n,{CustomElementRegistry:{configurable:!0,value:a,writable:!0},customElements:{configurable:!0,enumerable:!0,get:function(){return f}}}),E(g,"shim",{enumerable:!0,value:m.shim}),h.mainDocumentReady=T(v),u.observeDocument(v),h.mainDocumentReady||(u.pushQueue(),d=C.removeEventListener,p=function(){u.popQueue(),h.mainDocumentReady=!0,d.call(v,"DOMContentLoaded",p,!1)},C.addEventListener.call(v,"DOMContentLoaded",p,!1))}(void 0!==n?n:"undefined"!=typeof self?self:"undefined"!=typeof window?window:{})}).call(this,"undefined"!=typeof global?global:"undefined"!=typeof self?self:"undefined"!=typeof window?window:{})},{"./lib/base-element-constructor":2,"./lib/built-in-elements":3,"./lib/classes":4,"./lib/common":5,"./lib/custom-element-registry":10,"./lib/is-valid-custom-element-name":11,"./lib/native-custom-elements":12,"./lib/other-polyfills/Array.from":13,"./lib/other-polyfills/DOMException":14,"./lib/reactions":16,"./lib/shims":17}],2:[function(e,t,n){"use strict";var o=e("./common"),r=e("./conformance"),i=e("./custom-element-definition"),l=e("./custom-element-properties"),a=e("./reactions"),s=Object.create(null),c=window.DOMException,u=Object.getPrototypeOf,m=Object.setPrototypeOf,d=window.TypeError;t.exports=function(e){var t,n,p,f,h=null==this?null:u(this),w=h?i.fromPrototype(h):null;if(!w)throw new d(o.illegalConstructor);if(e!==w.baseInterface)throw new d(o.illegalConstructor);if(n=w.prototype,0===w.constructionStack.length)return t=w.createElement(document),p=new l(t,w),o.nextElementIsSynchronous&&(o.nextElementIsSynchronous=!1,p.synchronous=!0,r.beginCheck(p)),m(t,n),a.observeElement(p.element),w.finalizeElement(t),t;if(f=w.constructionStack.length-1,p=w.constructionStack[f],(t=p.element)===s)throw new c("Failed to construct 'CustomElement': Cannot create custom element <"+w.name+(w.isBuiltIn?' is="'+w.localName+'"':"")+"> from within its own custom element constructor.","InvalidStateError");return o.nextElementIsSynchronous&&(o.nextElementIsSynchronous=!1,p.synchronous=!0,r.beginCheck(p)),m(t,n),a.observeElement(p.element),w.constructionStack[f]=s,t}},{"./common":5,"./conformance":6,"./custom-element-definition":8,"./custom-element-properties":9,"./reactions":16}],3:[function(e,t,n){"use strict";var o,r,i,l,a,s,c,u,m,d=e("./common"),p={},f={},h=window.document,w=Document.prototype.createElement,g=Object.getOwnPropertyNames,y=d.hasOwnProperty,E=window.HTMLElement,b=E.prototype,v=[],C=d.isPrototypeOf,T={HTMLAnchorElement:["a"],HTMLDListElement:["dl"],HTMLDirectoryElement:["dir"],HTMLHeadingElement:["h1","h2","h3","h4","h5","h6"],HTMLKeygenElement:[],HTMLModElement:["del","ins"],HTMLOListElement:["ol"],HTMLParagraphElement:["p"],HTMLQuoteElement:["blockquote"],HTMLTableCaptionElement:["caption"],HTMLTableCellElement:["td","th"],HTMLTableColElement:["col"],HTMLTableRowElement:["tr"],HTMLTableSectionElement:["tbody","tfoot","thead"],HTMLUListElement:["ul"],HTMLUnknownElement:[]},D=g(window),N=[],O=/^HTML(.+)Element$/,M=function(){var e=String,t=e.prototype.toLowerCase;return function(n){return t.call(e(n))}}(),x=0,F=D.length,L=1;for(v[0]=E,N[0]=b;x<F;)if(i=D[x++],l=O.exec(i),(a=null==l?null:window[i])&&a.prototype&&C(b,a.prototype))if(p[i]=a,v[L++]=a,N[L]=a.prototype,c=y(T,i),s=c?T[i]:[M(l[1])],u=s.length,c)for(;u--;)f[s[u]]=a;else for(;u--;)m=s[u],w.call(h,m)instanceof a&&(f[m]=a);o=g(f),r=g(p),t.exports={constructorFromInterfaceName:function(e){return p[e]||null},constructorFromPrototype:function(e){for(var t=N.length;t--;)if(e===N[t])return v[t];return null},constructorFromTagName:function(e){return f[e]||null},interfaceNames:r,isElementInterface:function(e){for(var t=v.length;t--;)if(e===v[t])return!0;return!1},isElementPrototype:function(e){for(var t=N.length;t--;)if(e===N[t])return!0;return!1},isKnownTagName:function(e){return y(f,e)},tagNames:o}},{"./common":5}],4:[function(e,t,n){"use strict";function o(e,t){var n,a,s,c,u=(t||e).prototype;return this.originalConstructor=e,this.wasFunction=!l(e),y.set(e,this),y.set(u,this),t?(this.finalConstructor=t,e!==t?(this.isElementInterface=!0,this.finalConstructor.prototype=u,this.isClass=!1,y.set(t,this)):this.isClass=E,this):this.wasFunction?(this.isClass=E,null!=(a=f(u))&&a!==w?(this.baseProxy=y.get(a),this.baseProxy||("function"==typeof(n=a.constructor)&&n.prototype===a||((n=function(){}).prototype=a),this.baseProxy=new o(n)),n=this.baseProxy.finalConstructor):a=this.isClass?(n=e).prototype:g(u),s=!this.isClass&&this.baseProxy&&this.baseProxy.isElementInterface?i.bind(null,e,this.baseProxy.finalConstructor):r.bind(null,e),this.isClass?(c="(function(){return function(init,base){return class extends base{constructor(){super();init(this,arguments);}};};})();",this.finalConstructor=h(c)(s,n)):(this.finalConstructor=function(e){return function(){return e(this,arguments)}}(s),this.finalConstructor.prototype=this.baseProxy?g(a):u,this.finalConstructor.prototype.constructor=e),y.set(this.finalConstructor,this),e.prototype=this.finalConstructor.prototype,e.prototype.constructor=this.originalConstructor,m(e,this.finalConstructor),void(this.baseProxy&&(m(u,this.finalConstructor.prototype),y.set(this.finalConstructor.prototype,this)))):(this.finalConstructor=e,this.isClass=!0,this)}function r(e,t,n){return e.apply(t,u(n)),t}function i(e,t,n,o){var r=t.call(n);return e.apply(r,u(o)),r}function l(e){var t;return!(!E||"function"!=typeof e)&&(!!(t=p(e,"prototype"))&&!t.writable)}var a=e("./common"),s=e("./private-property-store"),c=window.Object,u=Array.from,m=a.copyProperties,d=c.defineProperties,p=c.getOwnPropertyDescriptor,f=c.getPrototypeOf,h=window.eval,w=c.prototype,g=c.create,y=new s("ClassProxy"),E=a.supportsClasses;d(o.prototype,{constructor:{value:o},baseProxy:{enumerable:!0,value:null,writable:!0},finalConstructor:{enumerable:!0,value:null,writable:!0},isClass:{enumerable:!0,value:!1,writable:!0},isElementInterface:{enumerable:!0,value:!1,writable:!0},originalConstructor:{enumerable:!0,value:null,writable:!0},wasFunction:{enumerable:!0,value:!1,writable:!0}}),t.exports={isClass:l,proxy:function(e,t){var n=y.get(e);return n?n.finalConstructor:"function"==typeof e&&e.prototype instanceof c?new o(e,t).finalConstructor:e}}},{"./common":5,"./private-property-store":15}],5:[function(e,t,n){"use strict";function o(e,t){return d.call(e,t)}function r(e){var t=O(e);return b(t)?0:0!==t&&E(t)?(t=(t>0?1:-1)*g(f(t)),D(C(t,0),T)):t}e("./private-property-store");var i,l,a=Object.defineProperties,s=Object.getOwnPropertyDescriptor,c=Object.getOwnPropertyDescriptors,u=Object.getOwnPropertyNames,m=Object.getOwnPropertySymbols||function(){return[]},d=Object.prototype.hasOwnProperty,p=Object.prototype.isPrototypeOf,f=Math.abs,h=window.document,w=s(window.Document.prototype,"readyState").get,g=Math.floor,y=window.eval,E=window.isFinite,b=window.isNaN,v=!1,C=Math.max,T=Math.pow(2,53)-1,D=Math.min,N=!1,O=window.Number,M=window.setTimeout,x=0,F=function(){try{return y("(function(){return class A{};})()"),!0}catch(e){return!1}}();c||(i=Array.prototype.concat,c=function(e){for(var t,n,o=i.call(u(e),m(e)),r=0,l=o.length,a={};r<l;)t=o[r++],(n=s(e,t))&&(a[t]=n);return a},Object.defineProperty(Object,"getOwnPropertyDescriptors",{configurable:!0,value:c,writable:!0})),l={arrayContains:function(e,t){var n;if(null==e)return!1;for(n=r(e.length);n--;)if(e[n]===t)return!0;return!1},callbackNames:{adopted:"adoptedCallback",attributeChanged:"attributeChangedCallback",connected:"connectedCallback",disconnected:"disconnectedCallback",all:["adoptedCallback","attributeChangedCallback","connectedCallback","disconnectedCallback"]},conformanceStatus:{NONE:0,STARTED:1,CANCELED:2,FAILED:3,PASSED:4},copyProperties:function(e,t){var n,r={},i=c(e);for(var l in i)"arguments"!==l&&"caller"!==l&&"length"!==l&&"prototype"!==l&&o(i,l)&&(!(n=o(t,l)?s(t,l):null)||n.configurable?r[l]=i[l]:n&&n.writable&&(t[l]=e[l]));return a(t,r)},decrementShimStack:function(){x--},hasOwnProperty:o,htmlNamespace:"http://www.w3.org/1999/xhtml",illegalConstructor:"Illegal constructor",illegalInvocation:"Illegal invocation",incrementShimStack:function(){x++},isDocumentReady:function(e){return!(e===h&&!v)&&"loading"!==w.call(e)},isPrototypeOf:function(e,t){return p.call(e,t)},states:{custom:"custom",failed:"failed",uncustomized:"uncustomized",undefined:"undefined"},supportsClasses:F,throwAsync:function(e){M(function(e){throw e},0,e)}},t.exports=a(l,{mainDocumentReady:{get:function(){return v},set:function(e){v=!!e}},nextElementIsSynchronous:{get:function(){return N},set:function(e){N=!!e}},usingReactionApi:{get:function(){return x>0}}})},{"./private-property-store":15}],6:[function(e,t,n){"use strict";function o(e){var t,n,o,r=e.element,i=[],a=[],s=h.call(r);for(e.conformanceCheck=E.STARTED,e.originalAttributes=i,e.originalChildNodes=a,e.originalDocument=e.ownerDocument,l.reactionsEnabled=!1,t=0;n=s[0];)i[t++]=p.call(r,n);for(t=0;o=y.call(r);)a[t++]=g.call(r,o);l.reactionsEnabled=!0}function r(e){var t,n,o,r,i,a,s=e.element;if(s&&(e.originalAttributes||e.originalChildNodes)){if(l.reactionsEnabled=!1,e.originalAttributes){for(t=h.call(s);i=t[0];)p.call(s,i);for(o=0,r=(t=e.originalAttributes).length;o<r;)f.call(s,t[o++])}if(e.originalChildNodes){for(;a=y.call(s);)g.call(s,a);for(o=0,r=(n=e.originalChildNodes).length;o<r;)w.call(s,n[o++])}l.reactionsEnabled=!0}e.originalAttributes=null,e.originalChildList=null,e.originalDocument=null}function i(e){var t,n,o;if(e.state!==C.custom&&e.state!==C.undefined)return e.conformanceCheck=E.CANCELED,r(e);t=e.element,n=null,o=e.definition,t instanceof m?h.call(t).length>0?n=new b(v+"The resulting element must not have any attributes.","NotSupportedError"):null!==y.call(t)?n=new b(v+"The resulting element must not have any child nodes.","NotSupportedError"):e.parentNodeChanged&&null!==Node_get_parentNode.call(t)?n=new b(v+"The resulting element must not have a parent node.","NotSupportedError"):Node_get_ownerDocument.call(t)!==e.originalDocument?n=new b(v+"The resulting element must belong to the same document for which it was created.","NotSupportedError"):Element_get_localName.call(t)!==o.localName&&(n=new b(v+"The resulting element's local name must match the local name specified by its custom element definition ('"+o.localName+"').","NotSupportedError")):n=new T(v+"The resulting element must implement the HTMLElement interface."),n?(e.conformanceCheck=E.FAILED,e.conformanceError=n):e.conformanceCheck=E.PASSED}var l=e("./common"),a=e("./custom-element-properties"),s=Object.getOwnPropertyDescriptor,c=l.hasOwnProperty,u=window.Element.prototype,m=window.HTMLElement,d=window.Node.prototype,p=u.removeAttributeNode,f=u.setAttributeNodeNS,h=s(c(u,"attributes")?u:d,"attributes").get,w=d.appendChild,g=d.removeChild,y=s(d,"firstChild").get,E=l.conformanceStatus,b=window.DOMException,v="Failed to construct 'CustomElement': ",C=l.states,T=window.TypeError;t.exports={beginCheck:function(e){(e=a.get(e))&&e.conformanceCheck===E.NONE&&(e.state===C.custom||e.state===C.undefined)&&e.element&&o(e)},cancelCheck:function(e){(e=a.get(e))&&e.conformanceCheck===E.STARTED&&(e.conformanceCheck=E.CANCELED,r(e))},getError:function(e){return(e=a.get(e))?(e.conformanceCheck===E.STARTED&&(i(e),r(e)),e.conformanceError||null):null}}},{"./common":5,"./custom-element-properties":9}],7:[function(e,t,n){"use strict";var o=e("./common"),r=e("./custom-element-definition"),i=e("./custom-element-properties"),l=e("./is-valid-custom-element-name"),a=e("./native-custom-elements"),s=e("./reactions"),c=Array.from,u=window.Element.prototype.setAttributeNS,m=o.htmlNamespace,d=Object.setPrototypeOf,p=o.throwAsync;t.exports=function(e,t,n,f,h,w,g,y,E,b){var v,C,T=!0;if(!g&&a&&n===m&&(T=h||l(t))&&a.get(h||t))return y.apply(E,c(b));if(f="string"==typeof f?f:null,h="string"==typeof h?h:null,v=null,!g&&T&&(g=r.lookup(e,n,t,h)),g&&g.isBuiltIn)if(v=g.createElement(e),C=new i(v,g),w)try{s.upgradeElement(C,!0)}catch(e){p(e)}else s.enqueueUpgradeReaction(C);else if(g)if(w)try{v=g.constructElement(!0),C=i.get(v)}catch(t){o.nextElementIsSynchronous=!1,p(t),v=g.createElement(e),(C=new i(v,g)).state=STATES.FAILED,v instanceof HTMLUnknownElement||d(v,HTMLUnknownElementProto)}else v=g.createElement(e),C=new i(v,g),s.enqueueUpgradeReaction(C,g);else v=y.apply(E,c(b)),h&&u.call(v,null,"is",h);return v}},{"./common":5,"./custom-element-definition":8,"./custom-element-properties":9,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./reactions":16}],8:[function(e,t,n){"use strict";function o(e,t,n,o,i,l){this.name=e,this.localName=t,this.constructor=n,this.prototype=o,this.observedAttributes=i instanceof c&&i.length>0?i:[],this.callbacks=l,this.constructionStack=[],this.hasAdoptedCallback="function"==typeof l[s],this.isBuiltIn=t!==e,this.baseInterface=(t===e?h:r.constructorFromTagName(t))||null,T.set(n,this),D[e]=this,N.set(o,this)}var r=e("./built-in-elements"),i=e("./common"),l=e("./conformance"),a=e("./custom-element-properties"),s=i.callbackNames.adopted,c=window.Array,u=window.document,m=window.Document,d=window.Element.prototype,p=Object.getOwnPropertyDescriptor,f=i.hasOwnProperty,h=window.HTMLElement,w=i.htmlNamespace,g=window.Node.prototype,y=i.states,E=m.prototype.createElementNS,b=d.getAttributeNS,v=p(f(d,"localName")?d:g,"localName").get,C=p(f(d,"namespaceURI")?d:g,"namespaceURI").get,T=new Map,D={},N=new Map;o.prototype.constructElement=function(e){var t,n,o,r=!1;e&&(i.nextElementIsSynchronous=!0);try{t=new this.constructor}catch(e){r=!0,n=e}if((o=a.get(t))&&(o.conformanceCheck===conformanceStatus.STARTED&&(r?l.cancelCheck(o):(n=l.getError(o),r=!!n)),r&&(o.reactionQueue.length=0)),r)throw n;return t},o.prototype.createElement=function(e){var t;return e||(e=u),t=E.call(e,w,this.localName),this.isBuiltIn&&Element_setAttributeNS.call(t,null,"is",this.name),t},o.prototype.finalizeElement=function(e){var t=a.get(e);t||((t=new a(e,this)).upgradeEnqueued=!0),t.state=y.custom},o.fromConstructor=function(e){return T.get(e)||null},o.fromElement=function(e){var t,n;return e instanceof h&&C.call(e)===w?(t=v.call(e),n=t.indexOf("-")>-1?t:b.call(e,null,"is"),D[n]||null):null},o.fromName=function(e){return D[e]||null},o.fromPrototype=function(e){return N.get(e)||null},o.lookup=function(e,t,n,r){var i;return t===w&&e&&e.defaultView?(i=o.fromName(n)||(r?o.fromName(r):null),i&&i.localName===n?i:null):null},t.exports=o},{"./built-in-elements":3,"./common":5,"./conformance":6,"./custom-element-properties":9}],9:[function(e,t,n){"use strict";function o(e,t){l.set(e,this),this.definition=t,this.element=e,this.ownerDocument=c.call(e),this.reactionQueue=[]}var r,i=e("./common"),l=e("./private-property-store")("CustomElement"),a=i.conformanceStatus,s=Object.getPrototypeOf,c=Object.getOwnPropertyDescriptor(window.Node.prototype,"ownerDocument").get,u=i.states;(r=o.prototype).conformanceCheck=a.NONE,r.conformanceError=null,r.originalAttributes=null,r.originalChildNodes=null,r.originalDocument=null,r.parentNodeChanged=null,r.state=u.undefined,r.synchronous=!1,r.upgradeEnqueued=!1,o.get=function(e){return null==e?null:s(e)===r?e:l.get(e)},t.exports=o},{"./common":5,"./private-property-store":15}],10:[function(require,module,exports){"use strict";function methodError(e,t){return"Failed to execute '"+e+"' on 'CustomElementRegistry': "+t}function constructorInUseError(){return methodError("define","The provided constructor has already been used with this registry.")}function invalidNameError(e,t){return methodError(e,'"'+t+'" is not a valid custom element name')}function nameInUseError(e){return methodError("define",'The custom element name "'+e+'" has already been used with this registry.')}function resolveWhenDefinedPromise(e){var t,n;return hasOwnProperty(promiseResolvers,e)&&(t=promises[e],"function"==typeof(n=promiseResolvers[e])&&n(),delete promiseResolvers[e],delete promises[e]),t}function whenDefinedExecutor(e,t){promiseResolvers[e]=t}var builtInElements=require("./built-in-elements"),classes=require("./classes"),common=require("./common"),CustomElementDefinition=require("./custom-element-definition"),isValidCustomElementName=require("./is-valid-custom-element-name"),nativeCustomElements=require("./native-custom-elements"),reactions=require("./reactions"),Array=window.Array,ObjectProto=window.Object.prototype,arrayFrom=Array.from,callbackNames=common.callbackNames.all,document=window.document,Document_getElementsByTagName=window.Document.prototype.getElementsByTagName,DOMException=window.DOMException,Element_getAttributeNS=window.Element.prototype.getAttributeNS,hasOwnProperty=common.hasOwnProperty,isArray=Array.isArray,isPrototypeOf=common.isPrototypeOf,isRunning=!1,nativeConstructors=[],Promise=window.Promise,Promise_reject=Promise.reject.bind(Promise),Promise_resolve=Promise.resolve.bind(Promise),promiseResolvers={},promises={},CustomElementRegistry,instance,String=window.String,TypeError=window.TypeError;CustomElementRegistry=function(){function CustomElementRegistry(){if(instance)throw new TypeError(common.illegalConstructor);instance=this}return common.supportsClasses?eval("(function(){return function(init){return class CustomElementRegistry{constructor(){init.call(this);}};};})()")(CustomElementRegistry):CustomElementRegistry}(),CustomElementRegistry.prototype.define=function(e,t,n){var o,r,i,l,a,s,c,u,m,d,p,f,h,w;if(this!==instance)throw new TypeError(methodError("define",common.illegalInvocation));if("function"==typeof t&&(t=classes.proxy(t)),o=n&&hasOwnProperty(n,"extends")&&null!=n.extends?String(n.extends):null,e=String(e),!nativeCustomElements||!!o){if(arguments.length<2)throw new TypeError(methodError("define","2 arguments required, but only "+arguments.length+" present."));if(null!=n&&!(n instanceof Object))throw new TypeError(methodError("define","Parameter 3 ('options') is not an object."));if("function"!=typeof t)throw new TypeError(methodError("define","Parameter 2 ('constructor') is not a function."));if(!isValidCustomElementName(e))throw new DOMException(invalidNameError("define",e),"SyntaxError")}if(CustomElementDefinition.fromName(e)||nativeCustomElements&&nativeCustomElements.get(e))throw new DOMException(nameInUseError(e),"NotSupportedError");if(CustomElementDefinition.fromConstructor(t))throw new DOMException(constructorInUseError(),"NotSupportedError");if(nativeCustomElements)for(d=nativeConstructors.length;d--;)if(nativeConstructors[d]===t)throw new DOMException(constructorInUseError(),"NotSupportedError");if(!nativeCustomElements||o){if(r=e,o){if(isValidCustomElementName(o))throw new DOMException(methodError("define","The tag name specified in the 'extends' option (\""+o+'") cannot be a custom element name.'),"NotSupportedError");if(!builtInElements.isKnownTagName(o))throw new DOMException(methodError("define","The tag name specified in the 'extends' option (\""+o+'") is not the name of a built-in element.'),"NotSupportedError");r=o}if(isRunning)throw new DOMException(methodError("define","The registry is currently processing another custom element definition."),"NotSupportedError");isRunning=!0;try{if(null==(i=t.prototype)||!isPrototypeOf(ObjectProto,i))throw new TypeError(methodError("define","The 'prototype' property of the provided constructor is not an object. (Is the constructor a bound function?)"));for(l={},d=callbackNames.length;d--;){var g=i[a=callbackNames[d]];if(void 0!==g&&"function"!=typeof g)throw new TypeError(methodError("define","The provided constructor's '"+a+"' prototype property is not a function."));l[a]=g||null}if(s=null,null!=l.attributeChangedCallback&&void 0!==(c=t.observedAttributes)){if(!isArray(c))try{c=arrayFrom(c)}catch(e){throw new TypeError(methodError("define","The provided constructor's 'observedAttributes' property is not an Array (or an Array-like object)."))}for(s=[],d=0,p=c.length;d<p;)s[d]=String(c[d]),d++}}finally{isRunning=!1}if(u=new CustomElementDefinition(e,r,t,i,s,l),m=Document_getElementsByTagName.call(document,r),o){for(h=[],w=0,d=0,p=m.length;d<p;)Element_getAttributeNS.call(m[d],null,"is")===u.name&&(h[w++]=m[d]),d++;m=h}for(p=m.length,d=0,reactions.pushQueue();d<p;)reactions.enqueueUpgradeReaction(m[d++],u);reactions.popQueue(),resolveWhenDefinedPromise(e)}else{for(f=[],d=arguments.length;d--;)f[d]=1===d?t:arguments[d];isRunning=!0;try{nativeCustomElements.define.apply(nativeCustomElements.instance,f)}finally{isRunning=!1}(t=nativeCustomElements.get(e))&&(nativeConstructors[nativeConstructors.length]=t,resolveWhenDefinedPromise(e))}},CustomElementRegistry.prototype.get=function(e){var t;if(this!==instance)throw new TypeError(methodError("get",common.illegalInvocation));if(0===arguments.length)throw new TypeError(methodError("get","1 argument required, but only 0 present."));return nativeCustomElements&&(t=nativeCustomElements.get(e))?t:(t=CustomElementDefinition.fromName(String(e)),t?t.constructor:void 0)},CustomElementRegistry.prototype.whenDefined=function(e){var t;return this!==instance?Promise_reject(new TypeError(methodError("whenDefined",common.illegalInvocation))):0===arguments.length?Promise_reject(new TypeError(methodError("whenDefined","1 argument required, but only 0 present."))):(e=String(e),isValidCustomElementName(e)?CustomElementDefinition.fromName(e)||nativeCustomElements&&nativeCustomElements.get(e)?Promise_resolve():(hasOwnProperty(promises,e)?t=promises[e]:(t=new Promise(whenDefinedExecutor.bind(null,e)),promises[e]=t),t):Promise_reject(new DOMException(invalidNameError("whenDefined",e),"SyntaxError")))},module.exports=CustomElementRegistry},{"./built-in-elements":3,"./classes":4,"./common":5,"./custom-element-definition":8,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./reactions":16}],11:[function(e,t,n){"use strict";var o=/^(?:annotation-xml|color-profile|font-face(?:-(?:src|uri|format|name))?|missing-glyph)$/,r=function(){try{return new RegExp("1","u"),!0}catch(e){return!1}}()?new RegExp("^[a-z][\\-\\.0-9_a-z\\xB7\\xC0-\\xD6\\xD8-\\xF6\\xF8-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u203F-\\u2040\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD\\u{10000}-\\u{EFFFF}]*-[\\-\\.0-9_a-z\\xB7\\xC0-\\xD6\\xD8-\\xF6\\xF8-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u203F-\\u2040\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD\\u{10000}-\\u{EFFFF}]*$","u"):/^[a-z](?:[\-\.0-9_a-z\xB7\xC0-\xD6\xD8-\xF6\xF8-\u037D\u037F-\u1FFF\u200C\u200D\u203F\u2040\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD]|[\uD800-\uDB7F][\uDC00-\uDFFF])*\-(?:[\-\.0-9_a-z\xB7\xC0-\xD6\xD8-\xF6\xF8-\u037D\u037F-\u1FFF\u200C\u200D\u203F\u2040\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD]|[\uD800-\uDB7F][\uDC00-\uDFFF])*$/;t.exports=function(e){return!o.test(e)&&r.test(e)}},{}],12:[function(e,t,n){"use strict";var o,r,i,l,a,s=e("./common"),c=window.eval;s.supportsClasses&&"function"==typeof window.CustomElementRegistry&&window.customElements instanceof window.CustomElementRegistry?(o=window.customElements,r=window.CustomElementRegistry.prototype,i=r.define.bind(o),l=r.get.bind(o),a=r.whenDefined.bind(o),t.exports={canExtend:function(){var e,t,n="custom-elements-polyfill-test";try{return e=c("(function(){return class extends HTMLDivElement{constructor(){super();}};})()"),i(n,e,{extends:"div"}),(t=new e)&&t instanceof HTMLDivElement&&"DIV"===t.tagName&&t.getAttribute("is")===n}catch(e){return!1}}(),define:i,get:l,instance:o,prototype:r,whenDefined:a}):t.exports=!1},{"./common":5}],13:[function(e,t,n){t.exports=function(){var e,t,n,o,r,i;return"function"==typeof Array.from?Array.from:(e=Object.prototype.toString,t=function(t){return"function"==typeof t||"[object Function]"===e.call(t)},n=function(e){var t=Number(e);return isNaN(t)?0:0!==t&&isFinite(t)?(t>0?1:-1)*Math.floor(Math.abs(t)):t},o=Math.pow(2,53)-1,r=function(e){var t=n(e);return Math.min(Math.max(t,0),o)},i=function(e){var n,o,i,l,a,s,c,u;if(n=this,o=Object(e),null==e)throw new TypeError("Array.from requires an array-like object - not null or undefined");if(void 0!==(i=arguments.length>1?arguments[1]:void 0)){if(!t(i))throw new TypeError("Array.from: when provided, the second argument must be a function");arguments.length>2&&(l=arguments[2])}for(a=r(o.length),s=t(n)?Object(new n(a)):new Array(a),c=0;c<a;)u=o[c],s[c]=i?void 0===l?i(u,c):i.call(l,u,c):u,c+=1;return s.length=a,s},Object.defineProperty(Array,"from",{configurable:!0,enumerable:!1,value:i,writable:!0}),i)}()},{}],14:[function(e,t,n){(function(e){!function(e){"use strict";var n,o,r,i,l,a,s,c,u,m,d="Failed to construct 'DOMException': Please use the 'new' operator, this DOM object constructor cannot be called as a function.",p=Object.defineProperties,f=Object.defineProperty,h=e.DOMException,w=e.Error,g=function(){var e=Object.prototype.hasOwnProperty;return function(t,n){return e.call(t,n)}}(),y="function"==typeof h?h.prototype:null,E=y?function(){try{return new h("","SyntaxError"),h}catch(e){return null}}():null,b=!1,v=!1,C=e.String,T=e.TypeError;if(E&&y)t.exports=h;else if(y?(n=Object.getOwnPropertyDescriptor(y,"code"))&&n.get&&(b=!0,v=!0,n=n.get,o=Object.getOwnPropertyDescriptor(y,"message").get,r=Object.getOwnPropertyDescriptor(y,"name").get):b=!0,l=b?new WeakMap:null,i={IndexSizeError:{code:1,constant:"INDEX_SIZE_ERR"},HierarchyRequestError:{code:3,constant:"HIERARCHY_REQUEST_ERR"},WrongDocumentError:{code:4,constant:"WRONG_DOCUMENT_ERR"},InvalidCharacterError:{code:5,constant:"INVALID_CHARACTER_ERR"},NoModificationAllowedError:{code:7,constant:"NO_MODIFICATION_ALLOWED_ERR"},NotFoundError:{code:8,constant:"NOT_FOUND_ERR"},NotSupportedError:{code:9,constant:"NOT_SUPPORTED_ERR"},InvalidStateError:{code:11,constant:"INVALID_STATE_ERR"},SyntaxError:{code:12,constant:"SYNTAX_ERR"},InvalidModificationError:{code:13,constant:"INVALID_MODIFICATION_ERR"},NamespaceError:{code:14,constant:"NAMESPACE_ERR"},InvalidAccessError:{code:15,constant:"INVALID_ACCESS_ERR"},TypeMismatchError:{code:17,constant:"TYPE_MISMATCH_ERR"},SecurityError:{code:18,constant:"SECURITY_ERR"},NetworkError:{code:19,constant:"NETWORK_ERR"},AbortError:{code:20,constant:"ABORT_ERR"},URLMismatchError:{code:21,constant:"URL_MISMATCH_ERR"},QuotaExceededError:{code:22,constant:"QUOTA_EXCEEDED_ERR"},TimeoutError:{code:23,constant:"TIMEOUT_ERR"},InvalidNodeTypeError:{code:24,constant:"INVALID_NODE_TYPE_ERR"},DataCloneError:{code:25,constant:"DATA_CLONE_ERR"}},h=function e(t,o){var r,a;if(!(this instanceof e)||l&&l.has(this))throw new T(d);if(y&&b){try{n.call(this)}catch(e){a=e}if(!a)throw new T(d)}w.call(this),r=g(i,o)?i[o].code:0,t=void 0===t?"":C(t),o=void 0===o?"Error":C(o),b?(l.set(this,{code:r,message:t,name:o}),g(this,"message")&&delete this.message,g(this,"name")&&delete this.name):p(this,{code:{configurable:!0,enumerable:!0,value:r},message:{configurable:!0,enumerable:!0,value:t},name:{configurable:!0,enumerable:!0,value:o}})},t.exports=h,f(e,"DOMException",{configurable:!0,enumerable:!1,value:h,writable:!0}),v)h.prototype=p(y,{constructor:{configurable:!0,enumerable:!1,value:h,writable:!0},code:{configurable:!0,enumerable:!0,get:function(){var e=l.get(this);return e?e.code:n.call(this)}},message:{configurable:!0,enumerable:!0,get:function(){var e=l.get(this);return e?e.message:o.call(this)}},name:{configurable:!0,enumerable:!0,get:function(){var e=l.get(this);return e?e.name:r.call(this)}}});else{for(a=Object.getOwnPropertyNames(i),h.prototype=Object.create(w.prototype,{constructor:{configurable:!0,enumerable:!1,value:h,writable:!0}}),b&&p(h.prototype,{code:{configurable:!0,enumerable:!0,get:function(){var e=this instanceof h?l.get(this):null;if(!e)throw new T("Illegal invocation");return e.code}},message:{configurable:!0,enumerable:!0,get:function(){var e=this instanceof h?l.get(this):null;if(!e)throw new T("Illegal invocation");return e.message}},name:{configurable:!0,enumerable:!0,get:function(){var e=this instanceof h?l.get(this):null;if(!e)throw new T("Illegal invocation");return e.name}}}),u={},s=0,c=a.length;s<c;)u[(m=i[a[s++]]).constant]={configurable:!1,enumerable:!0,value:m.code,writable:!1};p(h,u),p(h.prototype,u)}}(void 0!==e?e:"undefined"!=typeof self?self:"undefined"!=typeof window?window:{})}).call(this,"undefined"!=typeof global?global:"undefined"!=typeof self?self:"undefined"!=typeof window?window:{})},{}],15:[function(e,t,n){"use strict";function o(e){var t=null!=e&&typeof e;return"function"===t||"object"===t}function r(e){var t;return this instanceof r?(t=i(arguments.length>0?e:""),b(this,{delete:{value:l.bind(t)},get:{value:u.bind(t)},has:{value:f.bind(t)},set:{value:w.bind(t)}})):arguments.length>0?new r(e):new r}var i,l,a,s,c,u,m,d,p,f,h,w,g,y,E=Array.prototype.concat,b=Object.defineProperties,v=Object.defineProperty,C=function(){var e=Object.prototype.hasOwnProperty;return function(t,n){return e.call(t,n)}}(),T="function"==typeof window.Symbol&&window.Symbol,D=window.WeakMap;T?(s=Object.getOwnPropertyDescriptors,d=Object.getOwnPropertySymbols,h=[],i=function(e){var t=T(e||"private");return h[h.length]=t,t},p=function(e){for(var t,n,o,r=d(e),i=h.length,l=r.length,a=[],s=0;i--;)for(n=h[i],t=0;t<l;)(o=r[t++])!==n&&(a[s++]=o);return a},s?c=function(e){for(var t,n=s(e),o=h.length;o--;)n[t=h[o]]&&delete n[t];return n}:(a=Object.getOwnPropertyDescriptor,m=Object.getOwnPropertyNames,c=function(e){for(var t,n,o=E.call(m(e),p(e)),r=0,i=o.length,l={};r<i;)t=o[r++],(n=a(e,t))&&(l[t]=n);return l}),b(Object,{getOwnPropertyDescriptors:{configurable:!0,writable:!0,value:c},getOwnPropertySymbols:{configurable:!0,writable:!0,value:p}}),l=function(e){if(f.call(this,e))return delete e[this]},u=function(e){return f.call(this,e)?e[this]:void 0},f=function(e){return o(e)&&C(e,this)},w=function(e,t){o(e)&&v(e,this,{configurable:!0,value:t,writable:!0})}):(g=D.prototype.get,y=D.prototype.set,i=function(){return new D},l=D.prototype.delete,u=function(e){return f.call(this,e)?g.call(this,e):null},f=D.prototype.has,w=function(e,t){o(e)&&y.call(this,e,t)}),t.exports=r},{}],16:[function(e,t,n){"use strict";function o(e){fe.set(e,this),this.throwOnDynamicMarkupInsertionCounter=0,O.observe(e,pe)}function r(){this.elements=[]}function i(e){return V.call(e)}function l(){ge&&(ge=!1,me.length>0?w():y())}function a(){ge||(i(N),i(O),ge=!0,0===me.length&&g())}function s(e){if(!de){if(D.enqueueElement(e),ce)return;return ce=!0,void le(c)}de.enqueueElement(e)}function c(){D.invoke(),ce=!1}function u(e,t,n){var o,r,i,l,a;ge&&(o=F.get(e))&&o.state!==ae.failed&&(e=o.element,i=(r=o.definition||x.fromElement(e)).callbacks[t],r.hasAdoptedCallback&&(t===S?o.ownerDocument=te.call(o.element):t===A&&(l=te.call(o.element),o.ownerDocument!==l&&u(o,S,[o.ownerDocument,l]))),null!=i&&(t!==P||(a=n[0],ne(r.observedAttributes,a)))&&(!ue&&me.length>0&&w(),o.reactionQueue[o.reactionQueue.length]=E.bind(null,i,o,n),s(o)))}function m(e){ge&&!e.upgradeEnqueued&&(e.upgradeEnqueued=!0,e.definition||Definition.fromElement(e.element),!ue&&me.length>0&&w(),e.reactionQueue[e.reactionQueue.length]=b.bind(null,e),s(e))}function d(e,t,n){var r,i,l,a,s,c,u;if(1===ee.call(e)){if(r=x.fromElement(e))if(i=F.get(e))i.parentNodeChanged=!0,i.state===ae.failed||i.state===ae.uncustomized||ne(t,i)||ne(n,i)||(t[t.length]=i);else if(i=new F(e,r),n[n.length]=i,l=te.call(e),ie(l)||M.usingReactionApi)m(i);else{(a=fe.get(l)||new o(l))&&(a.throwOnDynamicMarkupInsertionCounter+=1),C();try{b(i,!0)}catch(e){se(e)}v(),a&&(a.throwOnDynamicMarkupInsertionCounter-=1)}for(c=(s=e instanceof $?Z.call(e):[]).length,u=0;u<c;u++)d(s[u],t,n)}}function p(e){var t,n,o,r;if(1===ee.call(e)&&((t=F.get(e))&&u(t,R),e instanceof $))for(r=0,o=(n=Z.call(e)).length;r<o;r++)p(n[r])}function f(e){var t,n,o=e.length;if(0!==o&&ge){for(ue=!0,t=0;t<o;t++)u((n=e[t]).target,P,[n.attributeName,n.oldValue,X.call(n.target,n.attributeNamespace,n.attributeName),n.attributeNamespace]);ue=!1}}function h(e){var t,n,o,r,i,l,a=e.length,s=[],c=[];if(0!==a&&ge){for(ue=!0,t=0;t<a;t++){for(r=(i=(n=e[t]).addedNodes).length,o=0;o<r;o++)d(i[o],s,c);for(r=(l=n.removedNodes).length,o=0;o<r;o++)p(l[o])}for(a=s.length,t=0;t<a;t++)u(s[t],A);ue=!1}}function w(){var e=i(O),t=e.length,n=i(N),o=n.length;t>0&&h(e),o>0&&f(n)}function g(){var e=we.length,t=he.length;e>0&&(h(we),we.length=0),t>0&&(f(he),he.length=0)}function y(){for(var e=i(N),t=e.length,n=he.length,o=0;o<t;)he[n+o]=e[o],o++;for(t=(e=i(O)).length,n=we.length,o=0;o<t;)we[n+o]=e[o],o++}function E(e,t,n){return e.apply(t.element,n)}function b(e,t){var n,o,r,i,l,a,s=e.definition;if(e.state!==ae.custom&&e.state!==ae.failed){for(r=0,i=(n=G.call(e.element)).length;r<i;)o=n[r++],u(e,P,[W.call(o),null,Y.call(o),K.call(o)]);J.call(e.element)&&u(e,A),s.constructionStack.push(e),M.nextElementIsSynchronous=!0;try{a=s.constructElement()}catch(e){l=e}if(M.nextElementIsSynchronous=!1,s.constructionStack.pop(),l)throw e.state=STATES.FAILED,l;if(a!==e.element)throw new re("Custom element constructors cannot return a different object.","InvalidStateError");s.finalizeElement(e)}}function v(){var e,t=me.length;t>0&&(w(),e=me[--t],me.length=t,de=t>0?me[t-1]:null,e.invoke(),t<1&&g())}function C(){var e=new r,t=me.length;0===t?y():w(),me[t]=e,de=e}var T,D,N,O,M=e("./common"),x=e("./custom-element-definition"),F=e("./custom-element-properties"),L=e("./private-property-store"),S=M.callbackNames.adopted,P=M.callbackNames.attributeChanged,A=M.callbackNames.connected,R=M.callbackNames.disconnected,I=Object.getOwnPropertyDescriptor,H=M.hasOwnProperty,k=M.isPrototypeOf,j=window.Attr.prototype,_=window.Document.prototype,q=window.Element,U=q.prototype,z=window.HTMLElement,B=window.WebKitMutationObserver||window.MutationObserver,V=B.prototype.takeRecords,Q=window.Node.prototype,W=I(H(j,"localName")?j:Q,"localName").get,K=I(H(j,"namespaceURI")?j:Q,"namespaceURI").get,Y=I(j,"value").get,$=H(U,"children")?q:z,X=U.getAttributeNS,G=I(H(U,"attributes")?U:Q,"attributes").get,Z=I($.prototype,"children").get,J=I(Q,"isConnected").get,ee=I(Q,"nodeType").get,te=I(Q,"ownerDocument").get,ne=M.arrayContains,oe=window.Array.prototype.shift,re=window.DOMException,ie=M.isDocumentReady,le=window.setTimeout,ae=M.states,se=M.throwAsync,ce=!1,ue=!1,me=[],de=null,pe={childList:!0,subtree:!0},fe=new L("DocumentProperties"),he=[],we=[],ge=!0;r.prototype.enqueueElement=function(e){ue||w(),this.elements[this.elements.length]=e},r.prototype.invoke=function(){var e,t,n,o=this.elements,r=o.length,i=0;for(w();i<r;)for(t=(e=o[i++]).reactionQueue;t.length>0;){n=oe.call(t);try{n.apply(e)}catch(e){se(e)}}o.length=0},D=new r,N=new B(f),O=new B(h),T={get:function(){return ge},set:function(e){(e=!!e)!==ge&&(e?a():l())}},Object.defineProperty(M,"reactionsEnabled",T),t.exports=Object.defineProperties({},{enabled:T,enqueueCallbackReaction:{value:u},enqueueUpgradeReaction:{value:m},observeDocument:{value:function(e){var t;return k(_,e)?t=e:k(Q,e)&&(t=te.call(e)),t?fe.get(t)||new o(t):null}},observeElement:{value:function(e){var t=F.get(e),n=t?t.definition:null;!n||n.observedAttributes.length<1||N.observe(t.element,{attributes:!0,attributeOldValue:!0,attributeFilter:n.observedAttributes})}},popQueue:{value:v},pushQueue:{value:C},upgradeElement:b})},{"./common":5,"./custom-element-definition":8,"./custom-element-properties":9,"./private-property-store":15}],17:[function(e,t,n){"use strict";function o(e,t,n,r){var i,l,a,s,c,u,m,d,p,w=null==r||1===r,g=!!w&&L(v,e),b=!!g||(1===r||!!w&&L(E,e)),C=!b&&(9===r||null==r&&L(y,e));if(t||(t=Y.call(e)),b)if(g&&(i=z.call(e),l=B.call(e),a=_.call(e,null,"is")||null,s=h.lookup(t,l,i,a)),s)for(c=f(t,i,l,null,a,!1,s),d=0,p=(u=U.call(c)).length;d<p;d++)q.call(c,Q.call(u[d]));else c=Q.call(e,!1);else c=Q.call(e,!1);if(C&&(t=c),n)for(d=0,p=(m=W.call(e)).length;d<p;d++)V.call(c,o(m[d],t,!0));return c}function r(e){return"Failed to execute '"+e+"' on 'Document': "+e+"() may not be invoked on a Document from within the constructor of a custom element belonging to that Document."}function i(e){var t=oe.get(e);return t||(t={},oe.set(e,t)),t}function l(e,t){var n=t.length;for(g.observeDocument(e);n--;)g.observeDocument(t[n])}function a(){p.incrementShimStack(),g.pushQueue()}function s(){g.popQueue(),p.decrementShimStack()}function c(e,t,n){l(t,n),a();try{return e.apply(t,n)}finally{s()}}function u(e,t,n,o){var r,l,a,s=M(e,t),u=s&&F(s,"value"),m=s&&(u?s.value:s.set);!s||!s.configurable||u&&"function"!=typeof m||!o&&(o=i(e),F(o,t))||(o[t]=!0,r={configurable:!0,enumerable:s.enumerable},n&&"function"!=typeof n&&("function"==typeof n.get&&(l=n.get),n="function"==typeof n.set?n.set:null),m&&(a=function(){var e=c.bind(null,n||m);return function(){return e(this,J(arguments))}}()),u?(r.value=a,r.writable=s.writable):(r.get=l||s.get,a&&(r.set=a)),O(e,t,r))}function m(e,t){var n,o,r,l,a,s;if(ne(t))for(a=t.length;a--;)u(e,D(t[a]));else for(t=C(t),n=x(t),l=i(e),a=0,s=n.length;a<s;)r=t[o=n[a++]],F(e,o)&&!F(l,o)&&("function"==typeof r||r&&"function"==typeof r.get||"function"==typeof r.set)&&u(e,o,r,l)}function d(){var e,t,n,o=arguments.length,r=1,i=[],l=0;if(!(o<2)&&("function"==typeof(e=arguments[0])&&(e=e.prototype),null!=e&&"object"==typeof e)){for(;r<o;)null!=(t=arguments[r++])&&"object"==typeof t?m(e,t):(n=D(t||""))&&(i[l++]=n);m(e,i)}}var p=e("./common"),f=e("./create-element"),h=e("./custom-element-definition"),w=e("./custom-element-properties"),g=e("./reactions"),y=window.Document.prototype,E=window.Element.prototype,b=window.HTMLDocument.prototype,v=window.HTMLElement.prototype,C=window.Object,T=window.Node.prototype,D=window.String,N=C.defineProperties,O=C.defineProperty,M=C.getOwnPropertyDescriptor,x=C.getOwnPropertyNames,F=p.hasOwnProperty,L=p.isPrototypeOf,S=y.adoptNode,P=y.close,A=y.createElement,R=y.createElementNS,I=y.importNode,H=y.open,k=y.write,j=y.writeln,_=E.getAttributeNS,q=E.setAttributeNode,U=M(F(E,"attributes")?E:T,"attributes").get,z=M(F(E,"localName")?E:T,"localName").get,B=M(F(E,"namespaceURI")?E:T,"namespaceURI").get,V=T.appendChild,Q=T.cloneNode,W=M(T,"childNodes").get,K=M(T,"isConnected").get,Y=M(T,"ownerDocument").get,$=M(T,"parentNode").get,X=M(T,"nodeType").get,G=D.prototype.split,Z=p.callbackNames.adopted,J=Array.from,ee=window.DOMException,te=p.htmlNamespace,ne=Array.isArray,oe=new WeakMap,re=window.TypeError;d(window.CharacterData,"after","before","remove","replaceWith"),d(y,"alinkColor","append","bgColor","body","designMode","dir","execCommand","fgColor","linkColor","prepend","title","vlinkColor",{adoptNode:function(e){var t=Y.call(e),n=L(T,e)?t:null,o=S.apply(this,J(arguments));return t===this&&this!==n&&g.enqueueCallbackReaction(e,Z,[n,this]),o},close:function(){var e=g.observeDocument(this);if(e&&e.throwOnDynamicMarkupInsertionCounter>0)throw new ee(r("close"),"InvalidStateError");return P.apply(this,J(arguments))},createElement:function(e,t){var n,o,r,i=L(b,this);return i&&g.observeDocument(this),i&&0!==arguments.length?(n=D(e),null!=(t=null==t?null:t.valueOf())&&(o=D(t instanceof C&&void 0!==t.is?t.is:t)),a(),r=f(this,n,te,null,o,!0,null,A,this,arguments),s(),r):A.apply(this,J(arguments))},createElementNS:function(e,t,n){var o,r,i=L(b,this),l=D(t),c=G.call(l,":"),u=c.length,m=c[u>1?1:0],d=u>1?c[0]:null;return i&&g.observeDocument(this),!i||arguments.length<2||c.length>2?R.apply(this,J(arguments)):(null!=(n=null==n?null:n.valueOf())&&(o=D(n instanceof C&&void 0!==n.is?n.is:n)),a(),r=f(this,m,e,d,o,!0,null,R,this,arguments),s(),r)},importNode:function(e,t){var n=L(y,this)&&L(T,e)?X.call(e):null;return null==n||9===n||11===n?I.apply(this,J(arguments)):o(e,this,t,n)},open:function(){var e;if(args.length>2)return H.apply(this,J(arguments));if((e=g.observeDocument(this))&&e.throwOnDynamicMarkupInsertionCounter>0)throw new ee(r("open"),"InvalidStateError");return H.apply(this,J(arguments))},write:function(){var e=g.observeDocument(this);if(e&&e.throwOnDynamicMarkupInsertionCounter>0)throw new ee(r("write"),"InvalidStateError");return k.apply(this,J(arguments))},writeln:function(){var e=g.observeDocument(this);if(e&&e.throwOnDynamicMarkupInsertionCounter>0)throw new ee(r("writeln"),"InvalidStateError");return j.apply(this,J(arguments))}}),d(window.DocumentFragment,"append","prepend"),d(window.DocumentType,"after","before","remove","replaceWith"),d(window.DOMTokenList,"add","remove","replace","toggle","value"),d(E,"after","append","before","prepend","remove","removeAttribute","removeAttributeNS","replaceWith","setAttribute","setAttributeNS","setAttributeNode","setAttributeNodeNS","slot","removeAttributeNode","insertAdjacentElement"),d(F(E,"id")?E:v,"children","classList","className","id"),d(window.NamedNodeMap,"setNamedItem","setNamedItemNS","removeNamedItem","removeNamedItemNS"),d(T,"appendChild","insertBefore","nodeValue","normalize","removeChild","replaceChild","textContent",{cloneNode:function e(t){var n=L(T,this)?X.call(this):null;return null==n||11===n?Q.apply(this,J(arguments)):e(this,null,t,n)}}),d(window.Range,"cloneContents","deleteContents","extractContents","insertNode","surroundContents"),N(T,{isConnected:{configurable:!0,enumerable:!0,get:function(){var e;if(!L(T,this))throw new re(p.illegalInvocation);return!((e=w.get(this))&&e.checkingConformance&&!e.parentNodeChanged)&&K.call(this)}},parentNode:{configurable:!0,enumerable:!0,get:function(){var e=w.get(this);return e&&e.checkingConformance&&!e.parentNodeChanged?null:$.call(this)}}}),O(F(v,"parentElement")?v:T,"parentElement",{configurable:!0,enumerable:!0,get:function(){var e,t;if(!L(T,this))throw new re(p.illegalInvocation);return(e=w.get(this))&&e.checkingConformance&&!e.parentNodeChanged?null:(t=$.call(this),t instanceof Element?t:null)}}),d(window.HTMLAnchorElement,"coords","charset","download","hreflang","name","ping","referrerPolicy","rel","relList","rev","shape","target","text","type","hash","host","hostname","href","password","pathname","port","protocol","search","username"),d(window.HTMLAreaElement,"alt","coords","download","ping","referrerPolicy","rel","relList","shape","target","hash","host","hostname","href","password","pathname","peort","protocol","search","username"),d(window.HTMLBaseElement,"href","target"),d(window.HTMLBodyElement,"background","bgColor","aLink","link","text","vLink"),d(window.HTMLButtonElement,"autofocus","disabled","formAction","formEnctype","formMethod","formNoValidate","formTarget","menu","name","type","value"),d(window.HTMLCanvasElement,"height","width"),d(window.HTMLDetailsElement,"open"),d(window.HTMLDialogElement,"close","open","show","showModal"),d(window.HTMLDivElement,"align"),d(v,"accessKey","contentEditable","contextMenu","dir","draggable","dropzone","hidden","innerText","lang","spellcheck","tabIndex","title","translate"),d(window.HTMLEmbedElement,"align","name"),d(window.HTMLFieldSetElement,"disabled","name"),d(window.HTMLFontElement,"color","face","size"),d(window.HTMLFormElement,"acceptCharset","action","autocomplete","encoding","enctype","method","name","noValidate","reset","target"),d(window.HTMLFrameElement,"cols","rows"),d(window.HTMLFrameSetElement,"frameBorder","longDesc","marginHeight","marginWidth","name","noResize","scrolling","src"),d(window.HTMLHRElement,"align","color","noShade","size","width"),d(window.HTMLIFrameElement,"align","allowFullscreen","allowPaymentRequest","allowUserMedia","frameBorder","height","longDesc","marginHeight","marginWidth","name","referrerPolicy","sandbox","scrolling","src","srcdoc","width"),d(window.HTMLImageElement,"align","alt","border","crossOrigin","height","hspace","isMap","longDesc","lowsrc","name","referrerPolicy","sizes","src","srcset","useMap","vspace","width"),d(window.HTMLInputElement,"accept","alt","autocomplete","autofocus","defaultChecked","defaultValue","dirName","disabled","formAction","formEnctype","formMethod","formNoValidate","formTarget","height","inputMode","max","maxLength","min","minLength","multiple","name","pattern","placeholder","readOnly","required","size","src","step","type","value","width"),d(window.HTMLLegendElement,"align"),d(window.HTMLLIElement,"value"),d(window.HTMLLinkElement,"as","charset","crossOrigin","href","hreflang","integrity","media","nonce","referrerPolicy","rel","relList","rev","target","type","sizes"),d(window.HTMLMapElement,"name"),d(window.HTMLMarqueeElement,"behavior","bgColor","direction","height","hspace","loop","scrollAmount","scrollDelay","trueSpeed","vspace","width"),d(window.HTMLMediaElement,"autoplay","controls","crossOrigin","defaultMuted","loop","preload","src"),d(window.HTMLMenuElement,"label","type"),d(window.HTMLMenuItemElement,"checked","default","disabled","icon","label","radiogroup","type"),d(window.HTMLMetaElement,"scheme"),d(window.HTMLMeterElement,"high","low","max","min","optimum","value"),d(window.HTMLModElement,"cite","dateTime"),d(window.HTMLObjectElement,"align","archive","border","code","codeBase","codeType","data","declare","height","hspace","name","standby","type","typeMustMatch","useMap","vspace","width"),d(window.HTMLOListElement,"reversed","start","type"),d(window.HTMLOptGroupElement,"disabled","label"),d(window.HTMLOptionElement,"defaultSelected","disabled","label","text","value"),d(window.HTMLOptionsCollection,"add","length","remove"),d(window.HTMLOutputElement,"defaultValue","htmlFor","name","value"),d(window.HTMLParagraphElement,"align"),d(window.HTMLParamElement,"name","type","value","valueType"),d(window.HTMLQuoteElement,"cite"),d(window.HTMLScriptElement,"async","charset","crossOrigin","defer","event","htmlFor","integrity","noModule","nonce","src","text","type"),d(window.HTMLSelectElement,"add","autocomplete","autofocus","disabled","length","multiple","name","remove","required","size"),d(window.HTMLSlotElement,"name"),d(window.HTMLSourceElement,"media","sizes","src","srcset","type"),d(window.HTMLStyleElement,"media","nonce","type"),d(window.HTMLTableCaptionElement,"align"),d(window.HTMLTableCellElement,"align","axis","abbr","bgColor","ch","chOff","colSpan","headers","height","noWrap","rowSpan","scope","vAlign","width"),d(window.HTMLTableColElement,"align","ch","chOff","span","vAlign","width"),d(window.HTMLTableElement,"align","bgColor","border","caption","cellPadding","cellSpacing","deleteCaption","deleteTFoot","deleteTHead","deleteRow","frame","rules","summary","tHead","tFoot","width"),d(window.HTMLTableRowElement,"align","bgColor","ch","chOff","vAlign"),d(window.HTMLTableSectionElement,"align","ch","chOff","deleteRow","vAlign"),d(window.HTMLTextAreaElement,"autocomplete","autofocus","cols","defaultValue","dirName","disabled","inputMode","maxLength","minLength","name","placeholder","readOnly","required","rows","value","wrap"),d(window.HTMLTimeElement,"dateTime"),d(window.HTMLTitleElement,"text"),d(window.HTMLTrackElement,"default","kind","label","src","srclang"),d(window.HTMLVideoElement,"height","playsInline","poster","width"),t.exports={shim:d}},{"./common":5,"./create-element":7,"./custom-element-definition":8,"./custom-element-properties":9,"./reactions":16}]},{},[1]);
+},{}],2:[function(require,module,exports){
 'use strict'
 
 exports.byteLength = byteLength
@@ -4583,9 +116,9 @@ function fromByteArray (uint8) {
   return parts.join('')
 }
 
-},{}],19:[function(require,module,exports){
+},{}],3:[function(require,module,exports){
 
-},{}],20:[function(require,module,exports){
+},{}],4:[function(require,module,exports){
 (function (process){
 var WritableStream = require('stream').Writable
 var inherits = require('util').inherits
@@ -4614,9 +147,9 @@ BrowserStdout.prototype._write = function(chunks, encoding, cb) {
 }
 
 }).call(this,require('_process'))
-},{"_process":100,"stream":114,"util":119}],21:[function(require,module,exports){
-arguments[4][19][0].apply(exports,arguments)
-},{"dup":19}],22:[function(require,module,exports){
+},{"_process":84,"stream":98,"util":103}],5:[function(require,module,exports){
+arguments[4][3][0].apply(exports,arguments)
+},{"dup":3}],6:[function(require,module,exports){
 /*!
  * The buffer module from node.js, for the browser.
  *
@@ -6324,7 +1857,7 @@ function numberIsNaN (obj) {
   return obj !== obj // eslint-disable-line no-self-compare
 }
 
-},{"base64-js":18,"ieee754":44}],23:[function(require,module,exports){
+},{"base64-js":2,"ieee754":28}],7:[function(require,module,exports){
 (function (Buffer){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -6435,7 +1968,7 @@ function objectToString(o) {
 }
 
 }).call(this,{"isBuffer":require("../../is-buffer/index.js")})
-},{"../../is-buffer/index.js":46}],24:[function(require,module,exports){
+},{"../../is-buffer/index.js":30}],8:[function(require,module,exports){
 /*istanbul ignore start*/"use strict";
 
 exports.__esModule = true;
@@ -6461,7 +1994,7 @@ function convertChangesToDMP(changes) {
 }
 
 
-},{}],25:[function(require,module,exports){
+},{}],9:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -6498,7 +2031,7 @@ function escapeHTML(s) {
 }
 
 
-},{}],26:[function(require,module,exports){
+},{}],10:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -6522,7 +2055,7 @@ function diffArrays(oldArr, newArr, callback) {
 }
 
 
-},{"./base":27}],27:[function(require,module,exports){
+},{"./base":11}],11:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -6754,7 +2287,7 @@ function clonePath(path) {
 }
 
 
-},{}],28:[function(require,module,exports){
+},{}],12:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -6774,7 +2307,7 @@ function diffChars(oldStr, newStr, callback) {
 }
 
 
-},{"./base":27}],29:[function(require,module,exports){
+},{"./base":11}],13:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -6798,7 +2331,7 @@ function diffCss(oldStr, newStr, callback) {
 }
 
 
-},{"./base":27}],30:[function(require,module,exports){
+},{"./base":11}],14:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -6909,7 +2442,7 @@ function canonicalize(obj, stack, replacementStack) {
 }
 
 
-},{"./base":27,"./line":31}],31:[function(require,module,exports){
+},{"./base":11,"./line":15}],15:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -6964,7 +2497,7 @@ function diffTrimmedLines(oldStr, newStr, callback) {
 }
 
 
-},{"../util/params":39,"./base":27}],32:[function(require,module,exports){
+},{"../util/params":23,"./base":11}],16:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -6988,7 +2521,7 @@ function diffSentences(oldStr, newStr, callback) {
 }
 
 
-},{"./base":27}],33:[function(require,module,exports){
+},{"./base":11}],17:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -7060,7 +2593,7 @@ function diffWordsWithSpace(oldStr, newStr, callback) {
 }
 
 
-},{"../util/params":39,"./base":27}],34:[function(require,module,exports){
+},{"../util/params":23,"./base":11}],18:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -7135,7 +2668,7 @@ exports. /*istanbul ignore end*/Diff = _base2['default'];
  */
 
 
-},{"./convert/dmp":24,"./convert/xml":25,"./diff/array":26,"./diff/base":27,"./diff/character":28,"./diff/css":29,"./diff/json":30,"./diff/line":31,"./diff/sentence":32,"./diff/word":33,"./patch/apply":35,"./patch/create":36,"./patch/parse":37}],35:[function(require,module,exports){
+},{"./convert/dmp":8,"./convert/xml":9,"./diff/array":10,"./diff/base":11,"./diff/character":12,"./diff/css":13,"./diff/json":14,"./diff/line":15,"./diff/sentence":16,"./diff/word":17,"./patch/apply":19,"./patch/create":20,"./patch/parse":21}],19:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -7314,7 +2847,7 @@ function applyPatches(uniDiff, options) {
 }
 
 
-},{"../util/distance-iterator":38,"./parse":37}],36:[function(require,module,exports){
+},{"../util/distance-iterator":22,"./parse":21}],20:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -7472,7 +3005,7 @@ function createPatch(fileName, oldStr, newStr, oldHeader, newHeader, options) {
 }
 
 
-},{"../diff/line":31}],37:[function(require,module,exports){
+},{"../diff/line":15}],21:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -7617,7 +3150,7 @@ function parsePatch(uniDiff) {
 }
 
 
-},{}],38:[function(require,module,exports){
+},{}],22:[function(require,module,exports){
 /*istanbul ignore start*/"use strict";
 
 exports.__esModule = true;
@@ -7666,7 +3199,7 @@ exports["default"] = /*istanbul ignore end*/function (start, minLine, maxLine) {
 };
 
 
-},{}],39:[function(require,module,exports){
+},{}],23:[function(require,module,exports){
 /*istanbul ignore start*/'use strict';
 
 exports.__esModule = true;
@@ -7686,7 +3219,7 @@ function generateOptions(options, defaults) {
 }
 
 
-},{}],40:[function(require,module,exports){
+},{}],24:[function(require,module,exports){
 'use strict';
 
 var matchOperatorsRe = /[|\\{}()[\]^$+*?.]/g;
@@ -7699,7 +3232,7 @@ module.exports = function (str) {
 	return str.replace(matchOperatorsRe, '\\$&');
 };
 
-},{}],41:[function(require,module,exports){
+},{}],25:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -8003,7 +3536,7 @@ function isUndefined(arg) {
   return arg === void 0;
 }
 
-},{}],42:[function(require,module,exports){
+},{}],26:[function(require,module,exports){
 (function (Buffer){
 (function (global, module) {
 
@@ -9291,7 +4824,7 @@ function isUndefined(arg) {
 );
 
 }).call(this,require("buffer").Buffer)
-},{"buffer":22}],43:[function(require,module,exports){
+},{"buffer":6}],27:[function(require,module,exports){
 (function (process){
 // Growl - Copyright TJ Holowaychuk <tj@vision-media.ca> (MIT Licensed)
 
@@ -9585,7 +5118,7 @@ function growl(msg, options, fn) {
 };
 
 }).call(this,require('_process'))
-},{"_process":100,"child_process":21,"fs":21,"os":97,"path":98}],44:[function(require,module,exports){
+},{"_process":84,"child_process":5,"fs":5,"os":81,"path":82}],28:[function(require,module,exports){
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   var e, m
   var eLen = nBytes * 8 - mLen - 1
@@ -9671,7 +5204,7 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
   buffer[offset + i - d] |= s * 128
 }
 
-},{}],45:[function(require,module,exports){
+},{}],29:[function(require,module,exports){
 if (typeof Object.create === 'function') {
   // implementation from standard node.js 'util' module
   module.exports = function inherits(ctor, superCtor) {
@@ -9696,7 +5229,7 @@ if (typeof Object.create === 'function') {
   }
 }
 
-},{}],46:[function(require,module,exports){
+},{}],30:[function(require,module,exports){
 /*!
  * Determine if an object is a Buffer
  *
@@ -9719,14 +5252,14 @@ function isSlowBuffer (obj) {
   return typeof obj.readFloatLE === 'function' && typeof obj.slice === 'function' && isBuffer(obj.slice(0, 0))
 }
 
-},{}],47:[function(require,module,exports){
+},{}],31:[function(require,module,exports){
 var toString = {}.toString;
 
 module.exports = Array.isArray || function (arr) {
   return toString.call(arr) == '[object Array]';
 };
 
-},{}],48:[function(require,module,exports){
+},{}],32:[function(require,module,exports){
 (function (global){
 /*! JSON v3.3.2 | http://bestiejs.github.io/json3 | Copyright 2012-2014, Kit Cambridge | http://kit.mit-license.org */
 ;(function () {
@@ -10632,7 +6165,7 @@ module.exports = Array.isArray || function (arr) {
 }).call(this);
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],49:[function(require,module,exports){
+},{}],33:[function(require,module,exports){
 /**
  * lodash 3.2.0 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -10661,7 +6194,7 @@ function baseAssign(object, source) {
 
 module.exports = baseAssign;
 
-},{"lodash._basecopy":50,"lodash.keys":57}],50:[function(require,module,exports){
+},{"lodash._basecopy":34,"lodash.keys":41}],34:[function(require,module,exports){
 /**
  * lodash 3.0.1 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -10695,7 +6228,7 @@ function baseCopy(source, props, object) {
 
 module.exports = baseCopy;
 
-},{}],51:[function(require,module,exports){
+},{}],35:[function(require,module,exports){
 /**
  * lodash 3.0.3 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -10754,7 +6287,7 @@ function isObject(value) {
 
 module.exports = baseCreate;
 
-},{}],52:[function(require,module,exports){
+},{}],36:[function(require,module,exports){
 /**
  * lodash 3.9.1 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -10893,7 +6426,7 @@ function isNative(value) {
 
 module.exports = getNative;
 
-},{}],53:[function(require,module,exports){
+},{}],37:[function(require,module,exports){
 /**
  * lodash 3.0.9 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -11027,7 +6560,7 @@ function isObject(value) {
 
 module.exports = isIterateeCall;
 
-},{}],54:[function(require,module,exports){
+},{}],38:[function(require,module,exports){
 /**
  * lodash 3.1.1 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -11084,7 +6617,7 @@ function create(prototype, properties, guard) {
 
 module.exports = create;
 
-},{"lodash._baseassign":49,"lodash._basecreate":51,"lodash._isiterateecall":53}],55:[function(require,module,exports){
+},{"lodash._baseassign":33,"lodash._basecreate":35,"lodash._isiterateecall":37}],39:[function(require,module,exports){
 /**
  * lodash (Custom Build) <https://lodash.com/>
  * Build: `lodash modularize exports="npm" -o ./`
@@ -11315,7 +6848,7 @@ function isObjectLike(value) {
 
 module.exports = isArguments;
 
-},{}],56:[function(require,module,exports){
+},{}],40:[function(require,module,exports){
 /**
  * lodash 3.0.4 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -11497,7 +7030,7 @@ function isNative(value) {
 
 module.exports = isArray;
 
-},{}],57:[function(require,module,exports){
+},{}],41:[function(require,module,exports){
 /**
  * lodash 3.1.2 (Custom Build) <https://lodash.com/>
  * Build: `lodash modern modularize exports="npm" -o ./`
@@ -11735,7 +7268,7 @@ function keysIn(object) {
 
 module.exports = keys;
 
-},{"lodash._getnative":52,"lodash.isarguments":55,"lodash.isarray":56}],58:[function(require,module,exports){
+},{"lodash._getnative":36,"lodash.isarguments":39,"lodash.isarray":40}],42:[function(require,module,exports){
 (function (process){
 var path = require('path');
 var fs = require('fs');
@@ -11837,7 +7370,7 @@ mkdirP.sync = function sync (p, opts, made) {
 };
 
 }).call(this,require('_process'))
-},{"_process":100,"fs":21,"path":98}],59:[function(require,module,exports){
+},{"_process":84,"fs":5,"path":82}],43:[function(require,module,exports){
 (function (process,global){
 'use strict';
 
@@ -12028,7 +7561,7 @@ global.mocha = mocha;
 module.exports = global;
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./lib/mocha":72,"_process":100,"browser-stdout":20}],60:[function(require,module,exports){
+},{"./lib/mocha":56,"_process":84,"browser-stdout":4}],44:[function(require,module,exports){
 'use strict';
 
 function noop () {}
@@ -12037,7 +7570,7 @@ module.exports = function () {
   return noop;
 };
 
-},{}],61:[function(require,module,exports){
+},{}],45:[function(require,module,exports){
 'use strict';
 
 /**
@@ -12234,7 +7767,7 @@ EventEmitter.prototype.emit = function (name) {
   return true;
 };
 
-},{}],62:[function(require,module,exports){
+},{}],46:[function(require,module,exports){
 'use strict';
 
 /**
@@ -12355,7 +7888,7 @@ Progress.prototype.draw = function (ctx) {
   return this;
 };
 
-},{}],63:[function(require,module,exports){
+},{}],47:[function(require,module,exports){
 (function (global){
 'use strict';
 
@@ -12372,7 +7905,7 @@ exports.getWindowSize = function getWindowSize () {
 };
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],64:[function(require,module,exports){
+},{}],48:[function(require,module,exports){
 'use strict';
 
 /**
@@ -12486,7 +8019,7 @@ Context.prototype.inspect = function () {
   }, 2);
 };
 
-},{"json3":48}],65:[function(require,module,exports){
+},{"json3":32}],49:[function(require,module,exports){
 'use strict';
 
 /**
@@ -12536,7 +8069,7 @@ Hook.prototype.error = function (err) {
   this._error = err;
 };
 
-},{"./runnable":91,"./utils":96}],66:[function(require,module,exports){
+},{"./runnable":75,"./utils":80}],50:[function(require,module,exports){
 'use strict';
 
 /**
@@ -12653,7 +8186,7 @@ module.exports = function (suite) {
   });
 };
 
-},{"../test":94,"./common":67}],67:[function(require,module,exports){
+},{"../test":78,"./common":51}],51:[function(require,module,exports){
 'use strict';
 
 var Suite = require('../suite');
@@ -12813,7 +8346,7 @@ module.exports = function (suites, context, mocha) {
   };
 };
 
-},{"../suite":93}],68:[function(require,module,exports){
+},{"../suite":77}],52:[function(require,module,exports){
 'use strict';
 
 /**
@@ -12878,7 +8411,7 @@ module.exports = function (suite) {
   }
 };
 
-},{"../suite":93,"../test":94}],69:[function(require,module,exports){
+},{"../suite":77,"../test":78}],53:[function(require,module,exports){
 'use strict';
 
 exports.bdd = require('./bdd');
@@ -12886,7 +8419,7 @@ exports.tdd = require('./tdd');
 exports.qunit = require('./qunit');
 exports.exports = require('./exports');
 
-},{"./bdd":66,"./exports":68,"./qunit":70,"./tdd":71}],70:[function(require,module,exports){
+},{"./bdd":50,"./exports":52,"./qunit":54,"./tdd":55}],54:[function(require,module,exports){
 'use strict';
 
 /**
@@ -12987,7 +8520,7 @@ module.exports = function (suite) {
   });
 };
 
-},{"../test":94,"./common":67}],71:[function(require,module,exports){
+},{"../test":78,"./common":51}],55:[function(require,module,exports){
 'use strict';
 
 /**
@@ -13095,7 +8628,7 @@ module.exports = function (suite) {
   });
 };
 
-},{"../test":94,"./common":67}],72:[function(require,module,exports){
+},{"../test":78,"./common":51}],56:[function(require,module,exports){
 (function (process,global,__dirname){
 'use strict';
 
@@ -13629,7 +9162,7 @@ Mocha.prototype.run = function (fn) {
 };
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {},"/node_modules\\mocha\\lib")
-},{"./context":64,"./hook":65,"./interfaces":69,"./reporters":79,"./runnable":91,"./runner":92,"./suite":93,"./test":94,"./utils":96,"_process":100,"escape-string-regexp":40,"growl":43,"path":19}],73:[function(require,module,exports){
+},{"./context":48,"./hook":49,"./interfaces":53,"./reporters":63,"./runnable":75,"./runner":76,"./suite":77,"./test":78,"./utils":80,"_process":84,"escape-string-regexp":24,"growl":27,"path":3}],57:[function(require,module,exports){
 'use strict';
 
 /**
@@ -13761,7 +9294,7 @@ function plural (ms, n, name) {
   return Math.ceil(ms / n) + ' ' + name + 's';
 }
 
-},{}],74:[function(require,module,exports){
+},{}],58:[function(require,module,exports){
 'use strict';
 
 /**
@@ -13779,7 +9312,7 @@ function Pending (message) {
   this.message = message;
 }
 
-},{}],75:[function(require,module,exports){
+},{}],59:[function(require,module,exports){
 (function (process,global){
 'use strict';
 
@@ -14274,7 +9807,7 @@ function sameType (a, b) {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"../ms":73,"../utils":96,"_process":100,"diff":34,"supports-color":19,"tty":63}],76:[function(require,module,exports){
+},{"../ms":57,"../utils":80,"_process":84,"diff":18,"supports-color":3,"tty":47}],60:[function(require,module,exports){
 'use strict';
 
 /**
@@ -14340,7 +9873,7 @@ function Doc (runner) {
   });
 }
 
-},{"../utils":96,"./base":75}],77:[function(require,module,exports){
+},{"../utils":80,"./base":59}],61:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -14412,7 +9945,7 @@ function Dot (runner) {
 inherits(Dot, Base);
 
 }).call(this,require('_process'))
-},{"../utils":96,"./base":75,"_process":100}],78:[function(require,module,exports){
+},{"../utils":80,"./base":59,"_process":84}],62:[function(require,module,exports){
 (function (global){
 'use strict';
 
@@ -14764,7 +10297,7 @@ function on (el, event, fn) {
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"../browser/progress":62,"../utils":96,"./base":75,"escape-string-regexp":40}],79:[function(require,module,exports){
+},{"../browser/progress":46,"../utils":80,"./base":59,"escape-string-regexp":24}],63:[function(require,module,exports){
 'use strict';
 
 // Alias exports to a their normalized format Mocha#reporter to prevent a need
@@ -14785,7 +10318,7 @@ exports.Progress = exports.progress = require('./progress');
 exports.Landing = exports.landing = require('./landing');
 exports.JSONStream = exports['json-stream'] = require('./json-stream');
 
-},{"./base":75,"./doc":76,"./dot":77,"./html":78,"./json":81,"./json-stream":80,"./landing":82,"./list":83,"./markdown":84,"./min":85,"./nyan":86,"./progress":87,"./spec":88,"./tap":89,"./xunit":90}],80:[function(require,module,exports){
+},{"./base":59,"./doc":60,"./dot":61,"./html":62,"./json":65,"./json-stream":64,"./landing":66,"./list":67,"./markdown":68,"./min":69,"./nyan":70,"./progress":71,"./spec":72,"./tap":73,"./xunit":74}],64:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -14852,7 +10385,7 @@ function clean (test) {
 }
 
 }).call(this,require('_process'))
-},{"./base":75,"_process":100,"json3":48}],81:[function(require,module,exports){
+},{"./base":59,"_process":84,"json3":32}],65:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -14948,7 +10481,7 @@ function errorJSON (err) {
 }
 
 }).call(this,require('_process'))
-},{"./base":75,"_process":100}],82:[function(require,module,exports){
+},{"./base":59,"_process":84}],66:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -15046,7 +10579,7 @@ function Landing (runner) {
 inherits(Landing, Base);
 
 }).call(this,require('_process'))
-},{"../utils":96,"./base":75,"_process":100}],83:[function(require,module,exports){
+},{"../utils":80,"./base":59,"_process":84}],67:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -15113,7 +10646,7 @@ function List (runner) {
 inherits(List, Base);
 
 }).call(this,require('_process'))
-},{"../utils":96,"./base":75,"_process":100}],84:[function(require,module,exports){
+},{"../utils":80,"./base":59,"_process":84}],68:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -15216,7 +10749,7 @@ function Markdown (runner) {
 }
 
 }).call(this,require('_process'))
-},{"../utils":96,"./base":75,"_process":100}],85:[function(require,module,exports){
+},{"../utils":80,"./base":59,"_process":84}],69:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -15258,7 +10791,7 @@ function Min (runner) {
 inherits(Min, Base);
 
 }).call(this,require('_process'))
-},{"../utils":96,"./base":75,"_process":100}],86:[function(require,module,exports){
+},{"../utils":80,"./base":59,"_process":84}],70:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -15525,7 +11058,7 @@ function write (string) {
 }
 
 }).call(this,require('_process'))
-},{"../utils":96,"./base":75,"_process":100}],87:[function(require,module,exports){
+},{"../utils":80,"./base":59,"_process":84}],71:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -15620,7 +11153,7 @@ function Progress (runner, options) {
 inherits(Progress, Base);
 
 }).call(this,require('_process'))
-},{"../utils":96,"./base":75,"_process":100}],88:[function(require,module,exports){
+},{"../utils":80,"./base":59,"_process":84}],72:[function(require,module,exports){
 'use strict';
 
 /**
@@ -15703,7 +11236,7 @@ function Spec (runner) {
  */
 inherits(Spec, Base);
 
-},{"../utils":96,"./base":75}],89:[function(require,module,exports){
+},{"../utils":80,"./base":59}],73:[function(require,module,exports){
 'use strict';
 
 /**
@@ -15775,7 +11308,7 @@ function title (test) {
   return test.fullTitle().replace(/#/g, '');
 }
 
-},{"./base":75}],90:[function(require,module,exports){
+},{"./base":59}],74:[function(require,module,exports){
 (function (process,global){
 'use strict';
 
@@ -15947,7 +11480,7 @@ function tag (name, attrs, close, content) {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"../utils":96,"./base":75,"_process":100,"fs":19,"mkdirp":58,"path":19}],91:[function(require,module,exports){
+},{"../utils":80,"./base":59,"_process":84,"fs":3,"mkdirp":42,"path":3}],75:[function(require,module,exports){
 (function (global){
 'use strict';
 
@@ -16340,7 +11873,7 @@ Runnable.prototype.run = function (fn) {
 };
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./ms":73,"./pending":74,"./utils":96,"debug":60,"events":61,"json3":48,"lodash.create":54}],92:[function(require,module,exports){
+},{"./ms":57,"./pending":58,"./utils":80,"debug":44,"events":45,"json3":32,"lodash.create":38}],76:[function(require,module,exports){
 (function (process,global){
 'use strict';
 
@@ -17306,7 +12839,7 @@ function extraGlobals () {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./pending":74,"./runnable":91,"./utils":96,"_process":100,"debug":60,"events":61}],93:[function(require,module,exports){
+},{"./pending":58,"./runnable":75,"./utils":80,"_process":84,"debug":44,"events":45}],77:[function(require,module,exports){
 'use strict';
 
 /**
@@ -17710,7 +13243,7 @@ Suite.prototype.run = function run () {
   }
 };
 
-},{"./hook":65,"./ms":73,"./utils":96,"debug":60,"events":61}],94:[function(require,module,exports){
+},{"./hook":49,"./ms":57,"./utils":80,"debug":44,"events":45}],78:[function(require,module,exports){
 'use strict';
 
 /**
@@ -17764,7 +13297,7 @@ Test.prototype.clone = function () {
   return test;
 };
 
-},{"./runnable":91,"./utils":96,"lodash.create":54}],95:[function(require,module,exports){
+},{"./runnable":75,"./utils":80,"lodash.create":38}],79:[function(require,module,exports){
 'use strict';
 
 /**
@@ -17803,7 +13336,7 @@ function toISOString(date) {
 
 module.exports = toISOString;
 
-},{}],96:[function(require,module,exports){
+},{}],80:[function(require,module,exports){
 (function (process,Buffer){
 'use strict';
 
@@ -18614,7 +14147,7 @@ exports.isPromise = function isPromise (value) {
 exports.noop = function () {};
 
 }).call(this,require('_process'),require("buffer").Buffer)
-},{"./to-iso-string":95,"_process":100,"buffer":22,"debug":60,"fs":19,"glob":19,"json3":48,"path":19,"util":119}],97:[function(require,module,exports){
+},{"./to-iso-string":79,"_process":84,"buffer":6,"debug":44,"fs":3,"glob":3,"json3":32,"path":3,"util":103}],81:[function(require,module,exports){
 exports.endianness = function () { return 'LE' };
 
 exports.hostname = function () {
@@ -18661,7 +14194,7 @@ exports.tmpdir = exports.tmpDir = function () {
 
 exports.EOL = '\n';
 
-},{}],98:[function(require,module,exports){
+},{}],82:[function(require,module,exports){
 (function (process){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -18889,7 +14422,7 @@ var substr = 'ab'.substr(-1) === 'b'
 ;
 
 }).call(this,require('_process'))
-},{"_process":100}],99:[function(require,module,exports){
+},{"_process":84}],83:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -18936,7 +14469,7 @@ function nextTick(fn, arg1, arg2, arg3) {
 }
 
 }).call(this,require('_process'))
-},{"_process":100}],100:[function(require,module,exports){
+},{"_process":84}],84:[function(require,module,exports){
 // shim for using process in browser
 var process = module.exports = {};
 
@@ -19122,10 +14655,10 @@ process.chdir = function (dir) {
 };
 process.umask = function() { return 0; };
 
-},{}],101:[function(require,module,exports){
+},{}],85:[function(require,module,exports){
 module.exports = require('./lib/_stream_duplex.js');
 
-},{"./lib/_stream_duplex.js":102}],102:[function(require,module,exports){
+},{"./lib/_stream_duplex.js":86}],86:[function(require,module,exports){
 // a duplex stream is just a stream that is both readable and writable.
 // Since JS doesn't have multiple prototypal inheritance, this class
 // prototypally inherits from Readable, and then parasitically from
@@ -19201,7 +14734,7 @@ function forEach(xs, f) {
     f(xs[i], i);
   }
 }
-},{"./_stream_readable":104,"./_stream_writable":106,"core-util-is":23,"inherits":45,"process-nextick-args":99}],103:[function(require,module,exports){
+},{"./_stream_readable":88,"./_stream_writable":90,"core-util-is":7,"inherits":29,"process-nextick-args":83}],87:[function(require,module,exports){
 // a passthrough stream.
 // basically just the most minimal sort of Transform stream.
 // Every written chunk gets output as-is.
@@ -19228,7 +14761,7 @@ function PassThrough(options) {
 PassThrough.prototype._transform = function (chunk, encoding, cb) {
   cb(null, chunk);
 };
-},{"./_stream_transform":105,"core-util-is":23,"inherits":45}],104:[function(require,module,exports){
+},{"./_stream_transform":89,"core-util-is":7,"inherits":29}],88:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -20165,7 +15698,7 @@ function indexOf(xs, x) {
   return -1;
 }
 }).call(this,require('_process'))
-},{"./_stream_duplex":102,"./internal/streams/BufferList":107,"./internal/streams/stream":108,"_process":100,"core-util-is":23,"events":41,"inherits":45,"isarray":47,"process-nextick-args":99,"safe-buffer":113,"string_decoder/":115,"util":19}],105:[function(require,module,exports){
+},{"./_stream_duplex":86,"./internal/streams/BufferList":91,"./internal/streams/stream":92,"_process":84,"core-util-is":7,"events":25,"inherits":29,"isarray":31,"process-nextick-args":83,"safe-buffer":97,"string_decoder/":99,"util":3}],89:[function(require,module,exports){
 // a transform stream is a readable/writable stream where you do
 // something with the data.  Sometimes it's called a "filter",
 // but that's not a great name for it, since that implies a thing where
@@ -20348,7 +15881,7 @@ function done(stream, er, data) {
 
   return stream.push(null);
 }
-},{"./_stream_duplex":102,"core-util-is":23,"inherits":45}],106:[function(require,module,exports){
+},{"./_stream_duplex":86,"core-util-is":7,"inherits":29}],90:[function(require,module,exports){
 (function (process){
 // A bit simpler than readable streams.
 // Implement an async ._write(chunk, encoding, cb), and it'll handle all
@@ -20894,7 +16427,7 @@ function CorkedRequest(state) {
   };
 }
 }).call(this,require('_process'))
-},{"./_stream_duplex":102,"./internal/streams/stream":108,"_process":100,"core-util-is":23,"inherits":45,"process-nextick-args":99,"safe-buffer":113,"util-deprecate":116}],107:[function(require,module,exports){
+},{"./_stream_duplex":86,"./internal/streams/stream":92,"_process":84,"core-util-is":7,"inherits":29,"process-nextick-args":83,"safe-buffer":97,"util-deprecate":100}],91:[function(require,module,exports){
 'use strict';
 
 /*<replacement>*/
@@ -20959,13 +16492,13 @@ BufferList.prototype.concat = function (n) {
   }
   return ret;
 };
-},{"safe-buffer":113}],108:[function(require,module,exports){
+},{"safe-buffer":97}],92:[function(require,module,exports){
 module.exports = require('events').EventEmitter;
 
-},{"events":41}],109:[function(require,module,exports){
+},{"events":25}],93:[function(require,module,exports){
 module.exports = require('./readable').PassThrough
 
-},{"./readable":110}],110:[function(require,module,exports){
+},{"./readable":94}],94:[function(require,module,exports){
 exports = module.exports = require('./lib/_stream_readable.js');
 exports.Stream = exports;
 exports.Readable = exports;
@@ -20974,16 +16507,16 @@ exports.Duplex = require('./lib/_stream_duplex.js');
 exports.Transform = require('./lib/_stream_transform.js');
 exports.PassThrough = require('./lib/_stream_passthrough.js');
 
-},{"./lib/_stream_duplex.js":102,"./lib/_stream_passthrough.js":103,"./lib/_stream_readable.js":104,"./lib/_stream_transform.js":105,"./lib/_stream_writable.js":106}],111:[function(require,module,exports){
+},{"./lib/_stream_duplex.js":86,"./lib/_stream_passthrough.js":87,"./lib/_stream_readable.js":88,"./lib/_stream_transform.js":89,"./lib/_stream_writable.js":90}],95:[function(require,module,exports){
 module.exports = require('./readable').Transform
 
-},{"./readable":110}],112:[function(require,module,exports){
+},{"./readable":94}],96:[function(require,module,exports){
 module.exports = require('./lib/_stream_writable.js');
 
-},{"./lib/_stream_writable.js":106}],113:[function(require,module,exports){
+},{"./lib/_stream_writable.js":90}],97:[function(require,module,exports){
 module.exports = require('buffer')
 
-},{"buffer":22}],114:[function(require,module,exports){
+},{"buffer":6}],98:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -21112,7 +16645,7 @@ Stream.prototype.pipe = function(dest, options) {
   return dest;
 };
 
-},{"events":41,"inherits":45,"readable-stream/duplex.js":101,"readable-stream/passthrough.js":109,"readable-stream/readable.js":110,"readable-stream/transform.js":111,"readable-stream/writable.js":112}],115:[function(require,module,exports){
+},{"events":25,"inherits":29,"readable-stream/duplex.js":85,"readable-stream/passthrough.js":93,"readable-stream/readable.js":94,"readable-stream/transform.js":95,"readable-stream/writable.js":96}],99:[function(require,module,exports){
 'use strict';
 
 var Buffer = require('safe-buffer').Buffer;
@@ -21385,7 +16918,7 @@ function simpleWrite(buf) {
 function simpleEnd(buf) {
   return buf && buf.length ? this.write(buf) : '';
 }
-},{"safe-buffer":113}],116:[function(require,module,exports){
+},{"safe-buffer":97}],100:[function(require,module,exports){
 (function (global){
 
 /**
@@ -21456,16 +16989,16 @@ function config (name) {
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],117:[function(require,module,exports){
-arguments[4][45][0].apply(exports,arguments)
-},{"dup":45}],118:[function(require,module,exports){
+},{}],101:[function(require,module,exports){
+arguments[4][29][0].apply(exports,arguments)
+},{"dup":29}],102:[function(require,module,exports){
 module.exports = function isBuffer(arg) {
   return arg && typeof arg === 'object'
     && typeof arg.copy === 'function'
     && typeof arg.fill === 'function'
     && typeof arg.readUInt8 === 'function';
 }
-},{}],119:[function(require,module,exports){
+},{}],103:[function(require,module,exports){
 (function (process,global){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -22055,324 +17588,166 @@ function hasOwnProperty(obj, prop) {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./support/isBuffer":118,"_process":100,"inherits":117}],120:[function(require,module,exports){
-/// <reference path="../node_modules/expect.js/index.js" />
-/// <reference path="../node_modules/mocha/mocha.js" />
-
+},{"./support/isBuffer":102,"_process":84,"inherits":101}],104:[function(require,module,exports){
 'use strict';
 
-var util = require('./util'),
+require('mocha');
 
-    defineElement = util.defineElement,
-    invalidTagNames = util.invalidTagNames,
-    permutate = util.permutate,
-    reservedTagNames = util.reservedTagNames,
-    shouldThrowDOMException = util.shouldThrowDOMException,
-    shouldThrowTypeError = util.shouldThrowTypeError,
-    supportsClasses = util.supportsClasses,
-    uniqueCustomElementName = util.uniqueCustomElementName,
-    validTagNames = util.validTagNames;
+var expect = require('expect.js'),
+    util = require('./util'),
 
-describe('CustomElementRegistry.prototype.define()', function () {
-    context('should throw a TypeError', function () {
-        specify('when invoked with an invalid context object', function () {
-            shouldThrowTypeError(function () {
-                CustomElementRegistry.prototype.define.call(window);
-            });
-        });
-        specify('when invoked with no arguments', function () {
-            shouldThrowTypeError(function () {
-                customElements.define();
-            });
-        });
-        specify('when invoked with only 1 argument', function () {
-            shouldThrowTypeError(function () {
-                customElements.define(uniqueCustomElementName());
-            });
-        });
-        specify('when invoked with a second argument ("constructor") that is not a function', function () {
-            shouldThrowTypeError(function () {
-                customElements.define(uniqueCustomElementName(), 42);
-            });
-        });
-        specify('when invoked with a third argument ("options") that is not an object', function () {
-            shouldThrowTypeError(function () {
-                customElements.define(uniqueCustomElementName(), function () { }, 42);
-            });
-        });
-        specify('when constructor.prototype is not an object', function () {
-            shouldThrowTypeError(function () {
-                var f = function () { };
-                f.prototype = null;
-                customElements.define(uniqueCustomElementName(), f);
-            });
-        });
-        ['adoptedCallback', 'attributeChangedCallback', 'connectedCallback', 'disconnectedCallback'].forEach(function (callbackName) {
-            specify('when constructor.prototype has a property named "' + callbackName + '" that is not undefined and is not a function', function () {
-                shouldThrowTypeError(function () {
-                    var f = function () { };
-                    f.prototype[callbackName] = null;
-                    customElements.define(uniqueCustomElementName(), f);
-                });
-            });
-        });
-        specify('when constructor.prototype.attributeChangedCallback is defined, and the constructor has a property named "observedAttributes" that is not undefined and cannot be converted to an array of strings', function () {
-            shouldThrowTypeError(function () {
-                var f = function () { };
-                f.prototype.attributeChangedCallback = function () { };
-                f.observedAttributes = null;
-                customElements.define(uniqueCustomElementName(), f);
-            });
-        });
+    mochaContainer = document.getElementById('mocha'),
+    flattenTitles = util.flattenTitles,
+    log = util.log,
+    ready = false,
+    reports = [],
+    TestElement = util.TestElement;
+
+/**
+ * @param {Error} error
+ * @param {string} [title]
+ */
+function internalError(error, title) {
+    var now = new Date(),
+        description, div, h2, pre;
+
+    if (error instanceof Error) {
+        title = title || error.message;
+        description = error.stack;
+    } else if (arguments.length > 1) {
+        description = error;
+    } else {
+        title = error;
+    }
+
+    div = document.createElement('div');
+    div.className = 'test fail';
+
+    h2 = document.createElement('h2');
+    h2.appendChild(document.createTextNode(title));
+    div.appendChild(h2);
+
+    if (description) {
+        pre = document.createElement('pre');
+        pre.className = 'error';
+        pre.appendChild(document.createTextNode(description));
+        div.appendChild(pre);
+    }
+
+    mochaContainer.appendChild(div);
+
+    window.mochaResults = {
+        duration: now - util.startTime,
+        end: now,
+        failures: 1,
+        passes: 0,
+        pending: 0,
+        reports: [
+            {
+                message: error.message || title,
+                name: title,
+                result: false,
+                stack: description
+            }
+        ],
+        start: util.startTime,
+        suites: 0,
+        tests: 1
+    };
+}
+
+/**
+ * @param {Mocha.Test} test
+ * @param {Error} [err]
+ */
+function logResult(test, err) {
+    var passed = !err,
+        report;
+    if (!passed) {
+        report = {
+            message: err.message || String(err),
+            name: flattenTitles(test),
+            result: false
+        };
+        if (err.stack) {
+            report.stack = err.stack;
+        }
+        reports.push(report);
+    }
+}
+
+function onDocumentReady() {
+    log('Document ready.');
+}
+
+function runTests() {
+    var runner;
+
+    log('Starting tests.');
+    runner = mocha.run();
+
+    runner.on('end', function () {
+        var results = runner.stats;
+        results.reports = reports;
+        window.mochaResults = results;
+        log('Tests complete: ' + results.failures + ' failed, ' + results.passes + ' passed, ' + (results.failures + results.passes) + ' total');
     });
-    context('should throw a "NotSupportedError" DOMException', function () {
-        var name = uniqueCustomElementName();
-        specify('when the tag name specified in the \'extends\' option is a valid custom element name ("' + name + '")', function () {
-            shouldThrowDOMException('NotSupportedError', function () {
-                customElements.define(uniqueCustomElementName(), function () { }, { 'extends': name });
-            });
-        });
-        specify('when the tag name specified in the \'extends\' option is not the name of a built-in element ("foo")', function () {
-            shouldThrowDOMException('NotSupportedError', function () {
-                customElements.define(uniqueCustomElementName(), function () { }, { 'extends': 'foo' });
-            });
-        });
-        specify('when invoked while the CustomElementRegistry is already processing a custom element definition', function () {
-            /*
-             * The CustomElementRegistry has an internal "element definition is running" flag which is
-             * activated after the arguments to the define() method are validated. Invoking the define()
-             * method while this flag is set throws a "NotSupportedError" DOMException.
-             * 
-             * After setting this flag, one of the next steps in the Custom Element Definition algorithm
-             * is to cycle through the four callback names, and check the prototype object for a function
-             * property with each name. The Get(O, P) operation (https://tc39.github.io/ecma262/#sec-get-o-p)
-             * is used for each callback name, where O is the custom element's prototype object, and P is
-             * the name of the callback. This operation invokes accessor descriptors on defined properties.
-             *
-             * For our test, a property named "adoptedCallback" is defined on the prototype object, and is
-             * given a get() accessor. An initial call to customElements.define() -- the last line in the
-             * expect(){} block below -- uses this prototype object in its definition. During this first
-             * definition, the "element definition is running" flag is set, and then the prototype is
-             * searched for callback methods. This is when the get() accessor for the "adoptedCallback"
-             * property is invoked, which then makes the second call to customElements.define() and causes
-             * the DOMException to be thrown.
-             */
-            shouldThrowDOMException('NotSupportedError', function () {
-                var TestClass = function () { };
-                Object.defineProperty(TestClass.prototype, 'adoptedCallback', {
-                    get: function () {
-                        customElements.define(uniqueCustomElementName(), function () { });
-                        return undefined;
-                    }
-                });
-                customElements.define(uniqueCustomElementName(), TestClass);
-            });
-        });
-        context('for duplicate constructors', function () {
-            permutate({
-                firstExtends: [null, 'div'],
-                firstIsClass: supportsClasses ? [true, false] : false,
-                secondExtends: [null, 'div'],
-                secondIsClass: supportsClasses ? [true, false] : false
-            }).forEach(function (o) {
-                var firstType, secondType, def;
-                if (o.firstIsClass === o.secondIsClass) {
-                    firstType = (o.firstExtends === o.secondExtends ? 'another' : ('a' + (o.secondExtends ? '' : 'n'))) + (o.secondExtends ? ' customized built-in element' : ' autonomous custom element');
-                    secondType = (o.firstExtends ? 'a customized built-in element' : 'an autonomous custom element');
-                    def = defineElement({ isClass: o.firstIsClass, localName: o.firstExtends });
-                    specify('when defining ' + secondType + ' with a constructor that is already in use by ' + firstType + ' (and both are defined as ' + (o.firstIsClass ? 'ES6 classes' : 'functions') + ')', function () {
-                        shouldThrowDOMException('NotSupportedError', function () {
-                            defineElement({ isClass: o.secondIsClass, localName: o.secondExtends, constructor: o.firstIsClass ? def.finalConstructor : def.originalConstructor });
-                        });
-                    });
-                }
-            });
-        });
-        context('for duplicate names', function () {
-            permutate({
-                firstExtends: [null, 'div'],
-                firstIsClass: supportsClasses ? [true, false] : false,
-                secondExtends: [null, 'div'],
-                secondIsClass: supportsClasses ? [true, false] : false
-            }).forEach(function (o) {
-                var firstType = (o.firstExtends === o.secondExtends ? 'another' : ('a' + (o.secondExtends ? '' : 'n'))) + (o.secondExtends ? ' customized built-in element' : ' autonomous custom element') + ' (defined as ' + (o.secondIsClass ? 'an ES6 class' : 'a function') + ')',
-                    secondType = (o.firstExtends ? 'a customized built-in element' : 'an autonomous custom element') + ' (as ' + (o.firstIsClass ? 'an ES6 class' : 'a function') + ')',
-                    def = defineElement({ isClass: o.firstIsClass, localName: o.firstExtends });
-                specify('when defining ' + secondType + ' with a name that is already in use by ' + firstType, function () {
-                    shouldThrowDOMException('NotSupportedError', function () {
-                        defineElement({ isClass: o.secondIsClass, localName: o.secondExtends, name: def.name });
-                    });
-                });
-            });
-        });
-    });
-    context('should throw a "SyntaxError" DOMException', function () {
-        context('when defining an autonomous custom element with an invalid name', function () {
-            invalidTagNames.forEach(function (name) {
-                specify('<' + name + '>', function () {
-                    shouldThrowDOMException('SyntaxError', function () {
-                        customElements.define(name, function () { });
-                    });
-                });
-            });
-        });
-        context('when defining a customized built-in element with an invalid name', function () {
-            invalidTagNames.forEach(function (name) {
-                specify('<div is="' + name + '">', function () {
-                    shouldThrowDOMException('SyntaxError', function () {
-                        customElements.define(name, function () { }, { 'extends': 'div' });
-                    });
-                });
-            });
-        });
-        context('when defining an autonomous custom element with a reserved tag name', function () {
-            reservedTagNames.forEach(function (name) {
-                specify('<' + name + '>', function () {
-                    shouldThrowDOMException('SyntaxError', function () {
-                        customElements.define(name, function () { });
-                    });
-                });
-            });
-        });
-        context('when defining a customized built-in element with a reserved tag name', function () {
-            reservedTagNames.forEach(function (name) {
-                specify('<div is="' + name + '">', function () {
-                    shouldThrowDOMException('SyntaxError', function () {
-                        customElements.define(name, function () { });
-                    });
-                });
-            });
-        });
-    });
-    context('should not throw an exception', function () {
+    runner.on('fail', logResult);
+    runner.on('pass', logResult);
 
-    });
-});
+    //util.permutate({
+    //    defineEarly: [true, false],
+    //    isClass: util.supportsClasses ? [true, false] : false,
+    //    localName: builtInElements.tagNames.concat(null)
+    //}, [
+    //'observedAttributes'
+    //]).forEach(function (options) {
+    //    new TestElement(options);
+    //});
+    //log('Test elements attached.');
+}
 
-},{"./util":126}],121:[function(require,module,exports){
-/// <reference path="../node_modules/expect.js/index.js" />
-/// <reference path="../node_modules/mocha/mocha.js" />
+util.startTime = new Date();
+mocha.setup('bdd');
 
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', onDocumentReady, false);
+} else {
+    onDocumentReady();
+}
+
+try {
+    require('../dist/custom-elements-polyfill.min.js');
+    try {
+
+        require('./spec/global');
+        require('./spec/CustomElementRegistry');
+        require('./spec/define');
+        require('./spec/get');
+        require('./spec/whenDefined');
+
+        require('./spec/constructors');
+
+        ready = true;
+
+    } catch (error) {
+        internalError(error, 'Tests failed to load');
+    }
+} catch (error) {
+    internalError(error, 'Polyfill failed to load');
+}
+
+if (ready) {
+    runTests();
+}
+
+},{"../dist/custom-elements-polyfill.min.js":1,"./spec/CustomElementRegistry":105,"./spec/constructors":106,"./spec/define":107,"./spec/get":108,"./spec/global":109,"./spec/whenDefined":110,"./util":111,"expect.js":26,"mocha":43}],105:[function(require,module,exports){
 'use strict';
 
-var util = require('./util'),
+require('mocha');
 
-    shouldThrowTypeError = util.shouldThrowTypeError;
-
-describe('CustomElementRegistry.prototype.get()', function () {
-    context('should throw a TypeError', function () {
-        specify('when invoked with an invalid context object', function () {
-            shouldThrowTypeError(function () {
-                CustomElementRegistry.prototype.get.call(window, 'a-a');
-            });
-        });
-        specify('when invoked with no arguments', function () {
-            shouldThrowTypeError(function () {
-                customElements.get();
-            });
-        });
-    });
-});
-
-},{"./util":126}],122:[function(require,module,exports){
-/// <reference path="../node_modules/expect.js/index.js" />
-/// <reference path="../node_modules/mocha/mocha.js" />
-
-'use strict';
-
-var util = require('./util'),
-
-    domExCodes = util.domExCodes,
-    invalidTagNames = util.invalidTagNames,
-    reservedTagNames = util.reservedTagNames,
-    validTagNames = util.validTagNames;
-
-describe('CustomElementRegistry.prototype.whenDefined()', function () {
-    context('should return a Promise that is rejected with a TypeError', function () {
-        specify('when invoked with an invalid context object', function (done) {
-            var promise = CustomElementRegistry.prototype.whenDefined.call(window, 'a-a');
-            expect(promise).to.be.a(Promise);
-            promise.then(function () {
-                done(new Error('Expected Promise to be rejected; was resolved instead'));
-            }, function (err) {
-                var result;
-                try {
-                    expect(err).to.be.a(TypeError);
-                } catch (ex) {
-                    result = ex;
-                }
-                done(result);
-            });
-        });
-        specify('when invoked with no arguments', function (done) {
-            var promise = customElements.whenDefined();
-            expect(promise).to.be.a(Promise);
-            promise.then(function () {
-                done(new Error('Expected Promise to be rejected; was resolved instead'));
-            }, function (err) {
-                var result;
-                try {
-                    expect(err).to.be.a(TypeError);
-                } catch (ex) {
-                    result = ex;
-                }
-                done(result);
-            });
-        });
-    });
-    context('should return a Promise that is rejected with a "SyntaxError" DOMException', function () {
-        context('when invoked with an invalid name', function () {
-            invalidTagNames.forEach(function (name) {
-                specify('"' + name + '"', function (done) {
-                    var promise = customElements.whenDefined(name);
-                    expect(promise).to.be.a(Promise);
-                    promise.then(function () {
-                        done(new Error('Expected Promise to be rejected; was resolved instead'));
-                    }, function (err) {
-                        var result;
-                        try {
-                            expect(err).to.be.a(DOMException);
-                            expect(err.name).to.be('SyntaxError');
-                            expect(err.code).to.be(domExCodes.SyntaxError);
-                        } catch (ex) {
-                            result = ex;
-                        }
-                        done(result);
-                    });
-                });
-            });
-        });
-        context('when invoked with a reserved tag name', function () {
-            reservedTagNames.forEach(function (name) {
-                specify('"' + name + '"', function (done) {
-                    var promise = customElements.whenDefined(name);
-                    expect(promise).to.be.a(Promise);
-                    promise.then(function () {
-                        done(new Error('Expected Promise to be rejected; was resolved instead'));
-                    }, function (err) {
-                        var result;
-                        try {
-                            expect(err).to.be.a(DOMException);
-                            expect(err.name).to.be('SyntaxError');
-                            expect(err.code).to.be(domExCodes.SyntaxError);
-                        } catch (ex) {
-                            result = ex;
-                        }
-                        done(result);
-                    });
-                });
-            });
-        });
-    });
-});
-
-},{"./util":126}],123:[function(require,module,exports){
-/// <reference path="../node_modules/expect.js/index.js" />
-/// <reference path="../node_modules/mocha/mocha.js" />
-
-'use strict';
-
-var util = require('./util'),
+var expect = require('expect.js'),
+    util = require('../util'),
         
     supportsClasses = util.supportsClasses;
 
@@ -22468,11 +17843,330 @@ describe('CustomElementRegistry.prototype', function () {
     });
 });
 
-},{"./util":126}],124:[function(require,module,exports){
-/// <reference path="../node_modules/expect.js/index.js" />
-/// <reference path="../node_modules/mocha/mocha.js" />
-
+},{"../util":111,"expect.js":26,"mocha":43}],106:[function(require,module,exports){
 'use strict';
+
+require('mocha');
+
+var expect = require('expect.js'),
+    util = require('../util'),
+    
+    defineElement = util.defineElement;
+
+describe('Constructing an autonomous custom element', function () {
+    
+});
+
+},{"../util":111,"expect.js":26,"mocha":43}],107:[function(require,module,exports){
+'use strict';
+
+require('mocha');
+
+var expect = require('expect.js'),
+    util = require('../util'),
+
+    defineElement = util.defineElement,
+    invalidTagNames = util.invalidTagNames,
+    permutate = util.permutate,
+    reservedTagNames = util.reservedTagNames,
+    shouldThrow = util.shouldThrow,
+    supportsClasses = util.supportsClasses,
+    uniqueCustomElementName = util.uniqueCustomElementName,
+    validTagNames = util.validTagNames;
+
+describe('CustomElementRegistry.prototype.define()', function () {
+
+    context('should return `undefined`', function () {
+        permutate({
+            asFunction: supportsClasses ? [false, true] : true,
+            localName: [null, 'div']
+        }).forEach(function (o) {
+            specify('when defining a valid ' + (o.localName ? 'customized built-in' : 'autonomous custom') + ' element (written as ' + (o.asFunction ? 'a function' : 'an ES6 class') + ')', function () {
+                expect(defineElement(o).returnValue).to.be(void 0);
+            });
+        });
+    });
+
+    context('should throw a TypeError', function () {
+        specify('when invoked with an invalid context object', function () {
+            shouldThrow(TypeError, function () {
+                CustomElementRegistry.prototype.define.call(window);
+            });
+        });
+        specify('when invoked with no arguments', function () {
+            shouldThrow(TypeError, function () {
+                customElements.define();
+            });
+        });
+        specify('when invoked with only 1 argument', function () {
+            shouldThrow(TypeError, function () {
+                customElements.define(uniqueCustomElementName());
+            });
+        });
+        specify('when invoked with a second argument ("constructor") that is not a function', function () {
+            shouldThrow(TypeError, function () {
+                customElements.define(uniqueCustomElementName(), 42);
+            });
+        });
+        specify('when invoked with a third argument ("options") that is not an object', function () {
+            shouldThrow(TypeError, function () {
+                customElements.define(uniqueCustomElementName(), function () { }, 42);
+            });
+        });
+        specify('when constructor.prototype is not an object', function () {
+            shouldThrow(TypeError, function () {
+                var f = function () { };
+                f.prototype = null;
+                customElements.define(uniqueCustomElementName(), f);
+            });
+        });
+        ['adoptedCallback', 'attributeChangedCallback', 'connectedCallback', 'disconnectedCallback'].forEach(function (callbackName) {
+            specify('when constructor.prototype has a property named "' + callbackName + '" that is not undefined and is not a function', function () {
+                shouldThrow(TypeError, function () {
+                    var f = function () { };
+                    f.prototype[callbackName] = null;
+                    customElements.define(uniqueCustomElementName(), f);
+                });
+            });
+        });
+        specify('when constructor.prototype.attributeChangedCallback is defined, and the constructor has a property named "observedAttributes" that is not undefined and cannot be converted to an array of strings', function () {
+            shouldThrow(TypeError, function () {
+                var f = function () { };
+                f.prototype.attributeChangedCallback = function () { };
+                f.observedAttributes = null;
+                customElements.define(uniqueCustomElementName(), f);
+            });
+        });
+    });
+
+    context('should throw a "NotSupportedError" DOMException', function () {
+        specify('when the tag name specified in the \'extends\' option is a valid custom element name', function () {
+            shouldThrow(DOMException, 'NotSupportedError', function () {
+                customElements.define(uniqueCustomElementName(), function () { }, { 'extends': uniqueCustomElementName() });
+            });
+        });
+        specify('when the tag name specified in the \'extends\' option is not the name of a built-in element', function () {
+            shouldThrow(DOMException, 'NotSupportedError', function () {
+                customElements.define(uniqueCustomElementName(), function () { }, { 'extends': 'foo' });
+            });
+        });
+        specify('when invoked while the CustomElementRegistry is already processing a custom element definition', function () {
+            /*
+             * The CustomElementRegistry has an internal "element definition is running" flag which is
+             * activated after the arguments to the define() method are validated. Invoking the define()
+             * method while this flag is set throws a "NotSupportedError" DOMException.
+             *
+             * After setting this flag, one of the next steps in the Custom Element Definition algorithm
+             * is to cycle through the four callback names, and check the prototype object for a function
+             * property with each name. The Get(O, P) operation (https://tc39.github.io/ecma262/#sec-get-o-p)
+             * is used for each callback name, where O is the custom element's prototype object, and P is
+             * the name of the callback. This operation invokes accessor descriptors on defined properties.
+             *
+             * For our test, a property named "adoptedCallback" is defined on the prototype object, and is
+             * given a get() accessor. An initial call to customElements.define() -- the last line in the
+             * expect(){} block below -- uses this prototype object in its definition. During this first
+             * definition, the "element definition is running" flag is set, and then the prototype is
+             * searched for callback methods. This is when the get() accessor for the "adoptedCallback"
+             * property is invoked, which then makes the second call to customElements.define() and causes
+             * the DOMException to be thrown.
+             */
+            shouldThrow(DOMException, 'NotSupportedError', function () {
+                var TestClass = function () { };
+                Object.defineProperty(TestClass.prototype, 'adoptedCallback', {
+                    get: function () {
+                        customElements.define(uniqueCustomElementName(), function () { });
+                        return undefined;
+                    }
+                });
+                customElements.define(uniqueCustomElementName(), TestClass);
+            });
+        });
+
+        context('for duplicate constructors', function () {
+            permutate({
+                firstExtends: [null, 'div'],
+                firstIsFunction: supportsClasses ? [false, true] : true,
+                secondExtends: [null, 'div'],
+                secondIsFunction: supportsClasses ? [false, true] : true
+            }).forEach(function (o) {
+                var firstType, secondType, def;
+                if (o.firstIsFunction === o.secondIsFunction) {
+                    firstType = (o.firstExtends === o.secondExtends ? 'another' : ('a' + (o.secondExtends ? '' : 'n'))) + (o.secondExtends ? ' customized built-in' : ' autonomous custom') + ' element';
+                    secondType = (o.firstExtends ? 'a customized built-in' : 'an autonomous custom') + ' element';
+                    def = defineElement({ asFunction: o.firstIsFunction, localName: o.firstExtends });
+                    specify('when defining ' + secondType + ' with a constructor that is already in use by ' + firstType + ' (and both are written as ' + (o.firstIsFunction ? 'functions' : 'ES6 classes') + ')', function () {
+                        shouldThrow(DOMException, 'NotSupportedError', function () {
+                            defineElement({ asFunction: o.secondIsFunction, localName: o.secondExtends, constructor: def.finalConstructor });
+                        });
+                    });
+                }
+            });
+        });
+
+        context('for duplicate names', function () {
+            permutate({
+                firstExtends: [null, 'div'],
+                firstIsFunction: supportsClasses ? [false, true] : true,
+                secondExtends: [null, 'div'],
+                secondIsFunction: supportsClasses ? [false, true] : true
+            }).forEach(function (o) {
+                var firstType = (o.firstExtends === o.secondExtends ? 'another' : ('a' + (o.secondExtends ? '' : 'n'))) + (o.secondExtends ? ' customized built-in' : ' autonomous custom') + ' element (written as ' + (o.secondIsFunction ? 'a function' : 'an ES6 class') + ')',
+                    secondType = (o.firstExtends ? 'a customized built-in' : 'an autonomous custom') + ' element (written as ' + (o.firstIsFunction ? 'a function' : 'an ES6 class') + ')',
+                    def = defineElement({ asFunction: o.firstIsFunction, localName: o.firstExtends });
+                specify('when defining ' + secondType + ' with a name that is already in use by ' + firstType, function () {
+                    shouldThrow(DOMException, 'NotSupportedError', function () {
+                        defineElement({ asFunction: o.secondIsFunction, localName: o.secondExtends, name: def.name });
+                    });
+                });
+            });
+        });
+
+    });
+
+    context('should throw a "SyntaxError" DOMException', function () {
+
+        context('when defining an autonomous custom element with an invalid name', function () {
+            invalidTagNames.forEach(function (name) {
+                specify('"' + name + '"', function () {
+                    shouldThrow(DOMException, 'SyntaxError', function () {
+                        customElements.define(name, function () { });
+                    });
+                });
+            });
+        });
+
+        context('when defining a customized built-in element with an invalid name', function () {
+            invalidTagNames.forEach(function (name) {
+                specify('"' + name + '"', function () {
+                    shouldThrow(DOMException, 'SyntaxError', function () {
+                        customElements.define(name, function () { }, { 'extends': 'div' });
+                    });
+                });
+            });
+        });
+
+        context('when defining an autonomous custom element with a reserved tag name', function () {
+            reservedTagNames.forEach(function (name) {
+                specify('"' + name + '"', function () {
+                    shouldThrow(DOMException, 'SyntaxError', function () {
+                        customElements.define(name, function () { });
+                    });
+                });
+            });
+        });
+
+        context('when defining a customized built-in element with a reserved tag name', function () {
+            reservedTagNames.forEach(function (name) {
+                specify('"' + name + '"', function () {
+                    shouldThrow(DOMException, 'SyntaxError', function () {
+                        customElements.define(name, function () { });
+                    });
+                });
+            });
+        });
+
+    });
+
+});
+
+},{"../util":111,"expect.js":26,"mocha":43}],108:[function(require,module,exports){
+'use strict';
+
+require('mocha');
+
+var expect = require('expect.js'),
+    util = require('../util'),
+
+    defineElement = util.defineElement,
+    invalidTagNames = util.invalidTagNames,
+    permutate = util.permutate,
+    reservedTagNames = util.reservedTagNames,
+    shouldThrow = util.shouldThrow,
+    supportsClasses = util.supportsClasses,
+    uniqueCustomElementName = util.uniqueCustomElementName,
+    validTagNames = util.validTagNames;
+
+describe('CustomElementRegistry.prototype.get()', function () {
+
+    permutate({
+        asFunction: supportsClasses ? [false, true] : true,
+        localName: [null, 'div']
+    }).forEach(function (o) {
+        context('when invoked with the name of a defined ' + (o.localName ? 'customized built-in' : 'autonomous custom') + ' element (written as ' + (o.asFunction ? 'a function' : 'an ES6 class') + '), should return a value that', function () {
+            var def = defineElement(o),
+                definedConstructor = def.definedConstructor,
+                finalConstructor = customElements.get(def.name);
+            
+            if (supportsClasses) {
+                it('is an ES6 class' + (o.asFunction ? ' (because the current browser supports them)' : ''), function () {
+                    expect(finalConstructor).to.be.a('function');
+                    expect(Object.getOwnPropertyDescriptor(finalConstructor, 'prototype').writable).to.be(false);
+                });
+            } else {
+                it('is a function', function () {
+                    expect(finalConstructor).to.be.a('function');
+                });
+            }
+            it('is ' + (o.asFunction ? 'not ' : '') + 'equal to the constructor originally passed to the define() method', function () {
+                var assertion = expect(finalConstructor);
+                if (o.asFunction) {
+                    expect(finalConstructor).not.to.be(definedConstructor);
+                } else {
+                    expect(finalConstructor).to.be(definedConstructor);
+                }
+            });
+        });
+    });
+
+    context('should return `undefined` when invoked with', function () {
+        
+        specify('an empty string', function () {
+            expect(customElements.get('')).to.be(void 0);
+        });
+
+        specify('a valid custom element name that has not yet been used in a custom element definition', function () {
+            expect(customElements.get(uniqueCustomElementName())).to.be(void 0);
+        });
+
+        context('an invalid custom element name', function () {
+            invalidTagNames.forEach(function (name) {
+                specify('"' + name + '"', function () {
+                    expect(customElements.get(name)).to.be(void 0);
+                });
+            });
+        });
+
+        context('a reserved tag name', function () {
+            reservedTagNames.forEach(function (name) {
+                specify('"' + name + '"', function () {
+                    expect(customElements.get(name)).to.be(void 0);
+                });
+            });
+        });
+
+    });
+
+    context('should throw a TypeError', function () {
+        specify('when invoked with an invalid context object', function () {
+            shouldThrow(TypeError, function () {
+                CustomElementRegistry.prototype.get.call(window, 'a-a');
+            });
+        });
+        specify('when invoked with no arguments', function () {
+            shouldThrow(TypeError, function () {
+                customElements.get();
+            });
+        });
+    });
+
+});
+
+},{"../util":111,"expect.js":26,"mocha":43}],109:[function(require,module,exports){
+'use strict';
+
+require('mocha');
+
+var expect = require('expect.js');
 
 describe('The global (window) object', function () {
     describe('\'CustomElementRegistry\' property', function () {
@@ -22523,118 +18217,107 @@ describe('The global (window) object', function () {
     });
 });
 
-},{}],125:[function(require,module,exports){
-/// <reference path="../../node_modules/mocha/mocha.js" />
+},{"expect.js":26,"mocha":43}],110:[function(require,module,exports){
 'use strict';
 
-require('expect.js');
 require('mocha');
 
-var builtInElements = require('../lib/browser/built-in-elements'),
-    util = require('./util'),
+var expect = require('expect.js'),
+    util = require('../util'),
 
-    flattenTitles = util.flattenTitles,
-    log = util.log,
-    reports = [],
-    TestElement = util.TestElement,
-    undefined;
+    defineElement = util.defineElement,
+    domExCodes = util.domExCodes,
+    invalidTagNames = util.invalidTagNames,
+    permutate = util.permutate,
+    reservedTagNames = util.reservedTagNames,
+    shouldRejectWith = util.shouldRejectWith,
+    shouldResolveWith = util.shouldResolveWith,
+    supportsClasses = util.supportsClasses,
+    uniqueCustomElementName = util.uniqueCustomElementName,
+    validTagNames = util.validTagNames;
 
-/**
- * @param {Mocha.Test} test
- * @param {Error} [err]
- */
-function logResult(test, err) {
-    var passed = !err,
-        report;
-    if (!passed) {
-        report = {
-            message: err.message || String(err),
-            name: flattenTitles(test),
-            result: false
-        };
-        if (err.stack) {
-            report.stack = err.stack;
-        }
-        reports.push(report);
-    }
-}
+describe('CustomElementRegistry.prototype.whenDefined()', function () {
 
-function onDocumentReady() {
-    log('Document ready.');
-}
+    context('should return a Promise that is resolved with `undefined`', function () {
 
-function runTests() {
-    var runner;
+        permutate({
+            asFunction: supportsClasses ? [false, true] : true,
+            localName: [null, 'div'],
+            defineFirst: [true, false]
+        }).forEach(function (o) {
+            var options = o,
+                name = uniqueCustomElementName(),
+                defType = o.asFunction ? 'a function' : 'an ES6 class',
+                elementType = (o.localName ? 'a customized built-in' : 'an autonomous custom') + ' element',
+                defOrder = o.defineFirst ? 'already defined' : 'defined later on';
 
-    log('Starting tests.');
-    util.startTime = new Date();
-    runner = mocha.run();
-
-    runner.on('end', function () {
-        var results = runner.stats;
-        results.reports = reports;
-        window.mochaResults = results;
-        log('Tests complete: ' + results.failures + ' failed, ' + results.passes + ' passed.');
-    });
-    runner.on('fail', logResult);
-    runner.on('pass', logResult);
-
-    util.permutate({
-        defineEarly: [true, false],
-        isClass: util.supportsClasses ? [true, false] : false,
-        localName: builtInElements.tagNames.concat(null)
-    }, [
-    'observedAttributes'
-    ]).forEach(function (options) {
-        new TestElement(options);
-    });
-    log('Test elements attached.');
-}
-
-mocha.setup('bdd');
-
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', onDocumentReady, false);
-} else {
-    onDocumentReady();
-}
-
-try {
-
-    require('../lib/browser/index.js');
-
-    try {
-        require('./spec-window');
-        require('./spec-CustomElementRegistry');
-        require('./spec-CustomElementRegistry-define');
-        require('./spec-CustomElementRegistry-get');
-        require('./spec-CustomElementRegistry-whenDefined');
-    } catch (error) {
-        describe('Tests', function () {
-            it('failed to load', function () {
-                throw error;
+            options.name = name;
+            specify('when invoked with the name of ' + elementType + ' (written as ' + defType + ') that is ' + defOrder, function (done) {
+                var promise;
+                if (options.defineFirst) {
+                    defineElement(options);
+                }
+                promise = customElements.whenDefined(name);
+                shouldResolveWith(promise, 'undefined', done);
+                if (!options.defineFirst) {
+                    setTimeout(defineElement, 1, options);
+                }
             });
         });
-    }
 
-} catch (error) {
-    describe('Polyfill', function () {
-        it('failed to load', function () {
-            throw error;
+    });
+
+    context('should return a Promise that is rejected with a TypeError', function () {
+        specify('when invoked with an invalid context object', function (done) {
+            var promise = CustomElementRegistry.prototype.whenDefined.call(window, 'a-a');
+            shouldRejectWith(promise, TypeError, done);
+        });
+        specify('when invoked with no arguments', function (done) {
+            var promise = customElements.whenDefined();
+            shouldRejectWith(promise, TypeError, done);
         });
     });
-}
 
-runTests();
+    context('should return a Promise that is rejected with a "SyntaxError" DOMException', function () {
+        specify('when invoked with an empty string', function (done) {
+            var promise = customElements.whenDefined('');
+            shouldRejectWith(promise, DOMException, 'SyntaxError', done);
+        });
 
-},{"../lib/browser/built-in-elements":2,"../lib/browser/index.js":10,"./spec-CustomElementRegistry":123,"./spec-CustomElementRegistry-define":120,"./spec-CustomElementRegistry-get":121,"./spec-CustomElementRegistry-whenDefined":122,"./spec-window":124,"./util":126,"expect.js":42,"mocha":59}],126:[function(require,module,exports){
+        context('when invoked with an invalid name', function () {
+            invalidTagNames.forEach(function (name) {
+                specify('"' + name + '"', function (done) {
+                    var promise = customElements.whenDefined(name);
+                    shouldRejectWith(promise, DOMException, 'SyntaxError', done);
+                });
+            });
+        });
+
+        context('when invoked with a reserved tag name', function () {
+            reservedTagNames.forEach(function (name) {
+                specify('"' + name + '"', function (done) {
+                    var promise = customElements.whenDefined(name);
+                    shouldRejectWith(promise, DOMException, 'SyntaxError', done);
+                });
+            });
+        });
+
+    });
+});
+
+},{"../util":111,"expect.js":26,"mocha":43}],111:[function(require,module,exports){
 'use strict';
 
-require('expect.js')
+var expect = require('expect.js'),
 
-var builtInElements = require('../lib/browser/built-in-elements'),
-    concat,
+    ObjectProto = Object.prototype,
+
+    Array_concat = Array.prototype.concat,
+    Array_slice = Array.prototype.slice,
+    callbackNames = ['adoptedCallback', 'attributeChangedCallback', 'connectedCallback', 'disconnectedCallback'],
     container = document.getElementById('test-container'),
+    defineProperties = Object.defineProperties,
+    defineProperty = Object.defineProperty,
     definitions = {},
     domExCodes = {
         IndexSizeError: 1,
@@ -22663,6 +18346,9 @@ var builtInElements = require('../lib/browser/built-in-elements'),
     getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors,
     getOwnPropertyNames = Object.getOwnPropertyNames,
     getOwnPropertySymbols = Object.getOwnPropertySymbols || function () { return []; },
+    getPrototypeOf = Object.getPrototypeOf,
+    globalEval = window.eval,
+    hOP = Object.prototype.hasOwnProperty,
     invalidTagNames = [
         'div',
         'hello',
@@ -22670,6 +18356,7 @@ var builtInElements = require('../lib/browser/built-in-elements'),
         'name-with-exclamation-point!',
         'name-with:colon'
     ],
+    isArray = Array.isArray,
     nameIncrement = 0,
     reg_n1 = /[^a-zA-Z]([a-z])/g,
     reg_n2 = /[^\w\$\-]/g,
@@ -22686,7 +18373,7 @@ var builtInElements = require('../lib/browser/built-in-elements'),
     ],
     supportsClasses = (function () {
         try {
-            eval('class A{}');
+            globalEval('(function(){return class A{};})()');
             return true;
         } catch (ex) {
             return false;
@@ -22699,9 +18386,8 @@ var builtInElements = require('../lib/browser/built-in-elements'),
     ];
 
 if (!getOwnPropertyDescriptors) {
-    concat = Array.prototype.concat;
     getOwnPropertyDescriptors = function getOwnPropertyDescriptors(O) {
-        var keys = concat.call(getOwnPropertyNames(O), getOwnPropertySymbols(O)),
+        var keys = Array_concat.call(getOwnPropertyNames(O), getOwnPropertySymbols(O)),
             i = 0,
             l = keys.length,
             result = {},
@@ -22719,13 +18405,61 @@ if (!getOwnPropertyDescriptors) {
 
 /**
  * @typedef {object} TestDefinitionOptions
- * 
- * @property {boolean} defineEarly - True if the custom element definition should be registered
- *   before the document is interactive; otherwise, false.
- * @property {?string} localName - The local name. For customized built-in elements, this should
- *   be the local name of the extended element (i.e. 'div'). For autonomous custom elements, this
- *   should be undefined or null.
+ * @property {boolean} defineEarly - True if the custom element definition should be registered before the document is interactive; otherwise, false.
+ * @property {?string} localName - The local name. For customized built-in elements, this should be the local name of the extended element (i.e. 'div'). For autonomous custom elements, this should be undefined or null.
  */
+
+/**
+ * Options used for quickly defining a custom element.
+ * @typedef {object} DefineElementOptions
+ * @property {boolean} asFunction - If this is true, then the custom element will be defined using plain "functional" class syntax. If this is false, then the custom element class will be defined using ES6 class syntax if the current environment supports it, or using "functional" class syntax otherwise. Defaults to false.
+ * @property {function} base - The base class extended by the custom element. If not provided, then this will be the base element interface represented by the 'localName' option (i.e. HTMLDivElement for a localName of "div"), or HTMLElement if no localName is provided.
+ * @property {function} constructor - The custom element constructor function. If not provided, then an empty constructor will be created.
+ * @property {string} name - The name of the custom element. If not provided, then a unique custom element name will be generated automatically.
+ * @property {string} localName - The localName of the custom element. If provided, it will be used to determine the base class extended by the custom element (unless a 'base' option is explicitly provided).
+ * @property {object} prototype - An optional plain object whose own properties will be copied onto the prototype object of the newly defined custom element.
+ */
+
+/**
+ * Describes the result of defining a custom element.
+ * @typedef {object} DefineElementResult
+ * @property {function} definedConstructor - The original constructor passed as the second argument to customElements.define().
+ * @property {function} finalConstructor - The final constructor returned from customElements.get() after the custom element is defined.
+ * @property {string} name - The custom element name.
+ * @property {*} returnValue - The return value from the call to customElements.define().
+ */
+
+/**
+ * @param {object} from
+ * @param {object} to
+ * @returns {object}
+ */
+function copyProperties(from, to) {
+    var toDescriptors = {},
+        fromDescriptors = getOwnPropertyDescriptors(from),
+        hasOwn, toDescriptor;
+    for (var name in fromDescriptors) {
+        if (name !== 'arguments' && name !== 'caller' && name !== 'length' && name !== 'prototype' && hasOwnProperty(fromDescriptors, name)) {
+            hasOwn = hasOwnProperty(to, name);
+            toDescriptor = hasOwn ? getOwnPropertyDescriptor(to, name) : null;
+            if (!toDescriptor || toDescriptor.configurable) {
+                toDescriptors[name] = fromDescriptors[name];
+            } else if (toDescriptor && toDescriptor.writable) {
+                to[name] = from[name];
+            }
+        }
+    }
+    return defineProperties(to, toDescriptors);
+}
+
+/**
+ * @param {object} O
+ * @param {string} p
+ * @returns {string}
+ */
+function hasOwnProperty(O, p) {
+    return hOP.call(O, p);
+}
 
 /**
  * @param {function} constructor
@@ -22741,55 +18475,91 @@ function constructorIsClass(constructor) {
 }
 
 /**
- * @param {object} [options]
- * @returns {function}
+ * Defines a custom element using the provided options.
+ * @param {DefineElementOptions} [options]
+ * @returns {DefineElementResult}
  */
 function defineElement(options) {
     var isClass = false,
-        rewriteAsClass, localName, name, constructor, interfaceConstructor, interfacePrototype, finalConstructor;
+        rewrite = true,
+        localName, name, base, interfaceConstructor, interfacePrototype, customConstructor,
+        source, definedConstructor, returnValue;
 
     options = Object(options == null ? {} : options);
-
-    rewriteAsClass = supportsClasses ? !!options.asClass : false;
+    
+    isClass = supportsClasses ? !options.asFunction : false;
     name = options.name || uniqueCustomElementName();
-    localName = options.localName || name;
-
-    interfaceConstructor = builtInElements[localName] || HTMLElement;
-    interfacePrototype = interfaceConstructor.prototype;
 
     if (options.hasOwnProperty('constructor') && typeof options.constructor === 'function') {
-        constructor = options.constructor;
-        isClass = constructorIsClass(constructor);
-        if (isClass) {
-            rewriteAsClass = false;
+        customConstructor = options.constructor;
+        if (constructorIsClass(customConstructor)) {
+            isClass = true;
+            rewrite = false;
+        } else {
+            base = getPrototypeOf(customConstructor.prototype);
+            if (base === null || base === ObjectProto) {
+                base = void 0;
+            } else {
+                base = null;
+                rewrite = false;
+            }
         }
-    } else {
-        constructor = function () { };
-    }
-    if (!isClass) {
-        constructor.prototype = Object.create(interfacePrototype);
-        constructor.prototype.constructor = constructor;
     }
 
-    if (rewriteAsClass) {
-        finalConstructor = eval("(function () { return function (a) { return class extends a { constructor() { super(); } }; }; })()")(constructor);
+    if (options.hasOwnProperty('base') && base === void 0 && (options.base == null || typeof options.base === 'function')) {
+        base = options.base || null;
+    }
+
+    if (options.localName) {
+        localName = options.localName;
     } else {
-        finalConstructor = constructor;
+        localName = name;
+        if (base === void 0) {
+            base = HTMLElement;
+        }
+    }
+
+    if (rewrite) {
+        if (isClass) {
+            source = '(function(){return function(a,b,c){return class';
+            if (base) {
+                source += ' extends c';
+            }
+            source += '{constructor(){';
+            if (base) {
+                source += 'super();';
+            }
+            if (customConstructor) {
+                source += 'a.apply(this,b(arguments));';
+            }
+            source += '}};};})()';
+            definedConstructor = globalEval(source)(customConstructor,Array.from,base);
+        } else {
+            definedConstructor = customConstructor || function () { };
+            if (base && base.prototype instanceof Object) {
+                definedConstructor.prototype = Object.create(base.prototype);
+                definedConstructor.prototype.constructor = definedConstructor;
+            }
+        }
+    } else {
+        definedConstructor = customConstructor;
     }
 
     if (options.hasOwnProperty('prototype') && options.prototype instanceof Object) {
-        Object.defineProperties(finalConstructor.prototype, Object.getOwnPropertyDescriptors(options.prototype));
+        copyProperties(options.prototype, definedConstructor.prototype);
     }
 
     if (name === localName) {
-        customElements.define(name, finalConstructor);
+        returnValue = customElements.define(name, definedConstructor);
     } else {
-        customElements.define(name, finalConstructor, { 'extends': localName });
+        returnValue = customElements.define(name, definedConstructor, { 'extends': localName });
     }
+
     return {
+        definedConstructor: definedConstructor,
         finalConstructor: customElements.get(name),
         name: name,
-        originalConstructor: constructor
+        returnValue: returnValue
     };
 }
 
@@ -22825,75 +18595,238 @@ function log(message) {
 }
 
 /**
- * @param {object} obj
- * @param {Array.<string>} [arrayProperties]
- * @returns {Array}
+ * @typedef {Object} PermutatedProperty
+ * @property {number} index
+ * @property {number} maxIndex
+ * @property {Array} values
  */
-function permutate(obj, arrayProperties) {
-    var value, result, i, l, p, q, r, newObj, permutations;
+
+/**
+ * @param {PermutatedProperty} prop
+ * @returns {*}
+ */
+function getCurrentValue(prop) {
+    return prop.values[prop.index];
+}
+
+/**
+ * Creates an array containing all possible permutations of the properties of the provided object.
+ * 
+ * @param {object} obj - The object used to generate the permutations. Only the object's enumerable Array properties are permutated. Its remaining own properties will be present in each 
+ * 
+ * @returns {Array.<Object>} - An array where each element is a permutation of the properties from the original object.
+ */
+function permutate(obj) {
+    var descriptor, descriptors, key, keys, objIsArray, permutation, prop, props, result, template, value,
+        i, k, l, p, r;
     if (obj == null) {
-        return [];
+        return [{}];
     }
-    if (!(arrayProperties instanceof Array)) {
-        arrayProperties = null;
-    }
-    obj = Object(obj);
-    for (var prop in obj) {
-        value = obj[prop];
-        if (value instanceof Array && (!arrayProperties || arrayProperties.indexOf(prop) === -1)) {
-            result = [];
-            r = 0;
-            for (i = 0, l = value.length; i < l; i++) {
-                newObj = {};
-                for (var copyProp in obj) {
-                    if (prop !== copyProp) {
-                        newObj[copyProp] = obj[copyProp];
-                    }
-                }
-                newObj[prop] = value[i];
-                permutations = permutate(newObj, arrayProperties);
-                for (p = 0, q = permutations.length; p < q; p++) {
-                    result[r++] = permutations[p];
-                }
+
+    objIsArray = isArray(obj);
+    descriptors = getOwnPropertyDescriptors(obj);
+    keys = Array_concat.call(getOwnPropertyNames(descriptors), getOwnPropertySymbols(descriptors));
+    i = 0;
+    k = keys.length;
+    props = [];
+    p = 0;
+    template = objIsArray ? [] : {};
+    while (i < k) {
+        key = keys[i++];
+        descriptor = descriptors[key];
+        if (descriptor.enumerable) {
+            value = obj[key];
+            l = isArray(value) ? value.length : 0;
+            if (l > 0) {
+                prop = {
+                    index: 0,
+                    maxIndex: l - 1,
+                    values: Array_slice.call(value)
+                };
+                defineProperty(template, key, {
+                    get: getCurrentValue.bind(null, prop)
+                });
+                props[p++] = prop;
+            } else {
+                template[key] = value;
             }
-            return result;
         }
     }
-    return [obj];
+
+    if (p === 0) {
+        return objIsArray ? Array_slice.call(obj) : [obj];
+    }
+
+    result = [];
+    r = 0;
+    while (prop) {
+        i = 0;
+        permutation = {};
+        while (i < k) {
+            key = keys[i++];
+            permutation[key] = template[key];
+        }
+        result[r++] = permutation;
+
+        i = 0;
+        while (i < p) {
+            prop = props[i];
+            if (prop.index < prop.maxIndex) {
+                prop.index++;
+                while (i--) {
+                    props[i].index = 0;
+                }
+                break;
+            }
+            prop = null;
+            i++;
+        }
+    }
+    return result;
 }
+
+/**
+ * Creates a new callback.
+ * 
+ * @class Callback
+ * @classdesc Represents a custom element lifecycle callback.
+ * 
+ * @param {string} name - The name of the callback.
+ * @param {Array} args - The arguments passed to or expected by the callback.
+ * 
+ * @property {string} name - The name of the callback.
+ * @property {Array} [args] - The arguments passed to (or expected by) the callback.
+ */
+function Callback(name, args) {
+    this.name = name;
+    this.args = args || [];
+}
+
+/**
+ * Determines whether or not two Callbacks are equal.
+ * 
+ * @param {Callback} other - The other Callback to compare to the current instance.
+ * 
+ * @returns {boolean} - True if the other Callback is equal to the current instance; otherwise, false.
+ */
+Callback.prototype.equals = function equals(other) {
+    var i;
+    if (this.name !== other.name || this.args.length !== other.args.length) {
+        return false;
+    }
+    i = this.args.length;
+    while (i--) {
+        if (this.args[i] !== other.args[i]) {
+            return false;
+        }
+    }
+    return true;
+};
 
 /**
  * @param {string} name
- * @param {function} action
+ * @param {Array} args
  */
-function shouldThrowDOMException(name, action) {
-    var code;
-    if (typeof name === 'function') {
-        action = name;
-        name = null;
+function reportCallback(name, args) {
+    var callback = new Callback(name, args);
+    
+}
+
+/**
+ * Asserts that the given promise is eventually rejected, optionally asserting that the rejection value is of a specified type and has a specified 'name' property.
+ * 
+ * @param {Promise} promise - The promise.
+ * @param {?function} errorType - The expected type of the error.
+ * @param {string} errorName - The expected name of the error.
+ * @param {function} callback - The callback that is executed when the promise is resolved or rejected. Its arguments are (1) the assertion error, if one was thrown, and (2) the rejection value, if the promise was rejected.
+ */
+function shouldRejectWith(promise, errorType, errorName, callback) {
+    expect(promise).to.be.a(Promise);
+    if (typeof errorName === 'function') {
+        callback = errorName;
+        errorName = null;
     }
-    if (name) {
-        code = domExCodes[name];
-        if (!code) {
-            throw new Error("'" + name + "' is not a valid DOMException name.");
+    promise.then(function () {
+        callback(new Error('Expected Promise to be rejected; was resolved instead'));
+    }, function (value) {
+        var isDOMException = errorType === DOMException,
+            code;
+        if (errorType) {
+            try {
+                expect(value).to.be.a(errorType);
+                if (errorName) {
+                    expect(value.name).to.be(errorName);
+                    if (errorType === DOMException) {
+                        code = domExCodes[errorName];
+                        if (code) {
+                            expect(value.code).to.be(code);
+                        }
+                    }
+                }
+            } catch (ex) {
+                callback(ex, value);
+            }
         }
-    }
-    return expect(action).to.throwException(function (ex) {
-        expect(ex).to.be.a(DOMException);
-        if (name) {
-            expect(ex.code).to.be(code);
-            expect(ex.name).to.be(name);
-        }
+        callback(null, value);
     });
 }
 
 /**
- * @param {function} action
+ * Asserts that the given promise is eventually resolved, optionally asserting that the resolved value is of a specified type.
+ * 
+ * @param {Promise} promise - The promise.
+ * @param {function|string} resolvedType - The expected type of the resolved value.
+ * @param {function} callback - The callback that is executed when the promise is resolved or rejected. Its arguments are (1) the assertion error, if one was thrown, and (2) the resolved value, if the promise was resolved.
  */
-function shouldThrowTypeError(action) {
-    return expect(action).to.throwException(function (ex) {
-        expect(ex).to.be.a(TypeError);
+function shouldResolveWith(promise, resolvedType, callback) {
+    expect(promise).to.be.a(Promise);
+    promise.then(function (value) {
+        if (resolvedType) {
+            try {
+                expect(value).to.be.a(resolvedType);
+            } catch (ex) {
+                callback(ex, value);
+                return;
+            }
+        }
+        callback(null, value);
+    }, function (error) {
+        callback(new Error('Expected Promise to be resolved; was rejected instead' + (error ? ' (' + String(error) + ')' : '')));
     });
+}
+
+/**
+ * Asserts that executing the provided function should throw an error, optionally asserting the type and name of the thrown error.
+ * 
+ * @param {function} errorType - The expected type of the thrown error.
+ * @param {string} errorName - The expected name of the thrown error.
+ * @param {function} action - The function whose execution is expected to throw an error.
+ */
+function shouldThrow(errorType, errorName, action) {
+    var code, callback;
+    if (arguments.length === 1) {
+        action = errorType;
+        errorType = null;
+    } else if (typeof errorName === 'function') {
+        action = errorName;
+        errorName = null;
+    } else if (errorName) {
+        code = domExCodes[name];
+    }
+    if (errorType || errorName) {
+        return expect(action).to.throwException(function (ex) {
+            if (errorType) {
+                expect(ex).to.be.a(errorType);
+            }
+            if (errorName) {
+                expect(ex.name).to.be(errorName);
+                if (code) {
+                    expect(ex.code).to.be(code);
+                }
+            }
+        });
+    }
+    return expect(action).to.throwException();
 }
 
 /**
@@ -22939,7 +18872,7 @@ function TestElement(options) {
     Object.defineProperties(this, {
         basePrototype: {
             enumerable: true,
-            value: (builtInElements[localName] || HTMLElement).prototype
+            value: options.basePrototype || HTMLElement.prototype
         },
         localName: {
             enumerable: true,
@@ -22963,6 +18896,7 @@ function TestElement(options) {
 
 module.exports = {
     constructorIsClass: constructorIsClass,
+    container: container,
     defineElement: defineElement,
     domExCodes: domExCodes,
     flattenTitles: flattenTitles,
@@ -22970,8 +18904,9 @@ module.exports = {
     log: log,
     permutate: permutate,
     reservedTagNames: reservedTagNames,
-    shouldThrowDOMException: shouldThrowDOMException,
-    shouldThrowTypeError: shouldThrowTypeError,
+    shouldRejectWith: shouldRejectWith,
+    shouldResolveWith: shouldResolveWith,
+    shouldThrow: shouldThrow,
     supportsClasses: supportsClasses,
     TestElement: TestElement,
     uniqueCustomElementName: uniqueCustomElementName,
@@ -22991,4 +18926,4 @@ Object.defineProperties(module.exports, {
     }
 });
 
-},{"../lib/browser/built-in-elements":2,"expect.js":42}]},{},[125]);
+},{"expect.js":26}]},{},[104]);

@@ -1,10 +1,10 @@
-﻿(function (window, undefined) {
+(function (window, undefined) {
     'use strict';
 
-    require('./other-polyfills/Array.from');
-    require('./other-polyfills/DOMException');
+    require('./lib/other-polyfills/Array.from');
+    require('./lib/other-polyfills/DOMException');
 
-    var common = require('./common'),
+    var common = require('./lib/common'),
         baseElementConstructor,
         builtInElements,
         classes,
@@ -33,9 +33,9 @@
         registry,
         TypeError = window.TypeError;
 
-    classes = require('./classes');
-    isValidCustomElementName = require('./is-valid-custom-element-name');
-    nativeCustomElements = require('./native-custom-elements');
+    classes = require('./lib/classes');
+    isValidCustomElementName = require('./lib/is-valid-custom-element-name');
+    nativeCustomElements = require('./lib/native-custom-elements');
 
     module.exports = defineProperties(api, {
         isValidCustomElementName: {
@@ -51,7 +51,7 @@
                 },
                 classes: {
                     enumerable: true,
-                    value: classes.supported
+                    value: common.supportsClasses
                 },
                 customizedBuiltInElements: {
                     enumerable: true,
@@ -112,9 +112,9 @@
      * no native customElements implementation at all.
      */
 
-    baseElementConstructor = require('./base-element-constructor');
-    builtInElements = require('./built-in-elements');
-    reactions = require('./reactions');
+    baseElementConstructor = require('./lib/base-element-constructor');
+    builtInElements = require('./lib/built-in-elements');
+    reactions = require('./lib/reactions');
 
     (function () {
 
@@ -147,8 +147,8 @@
 
     })();
 
-    CustomElementRegistry = require('./custom-element-registry');
-    shims = require('./shims');
+    CustomElementRegistry = require('./lib/custom-element-registry');
+    shims = require('./lib/shims');
 
     registry = new CustomElementRegistry();
 

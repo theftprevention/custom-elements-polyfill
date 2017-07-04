@@ -3,10 +3,10 @@
 (function (window, undefined) {
     'use strict';
 
-    require('./other-polyfills/Array.from');
-    require('./other-polyfills/DOMException');
+    require('./lib/other-polyfills/Array.from');
+    require('./lib/other-polyfills/DOMException');
 
-    var common = require('./common'),
+    var common = require('./lib/common'),
         baseElementConstructor,
         builtInElements,
         classes,
@@ -35,9 +35,9 @@
         registry,
         TypeError = window.TypeError;
 
-    classes = require('./classes');
-    isValidCustomElementName = require('./is-valid-custom-element-name');
-    nativeCustomElements = require('./native-custom-elements');
+    classes = require('./lib/classes');
+    isValidCustomElementName = require('./lib/is-valid-custom-element-name');
+    nativeCustomElements = require('./lib/native-custom-elements');
 
     module.exports = defineProperties(api, {
         isValidCustomElementName: {
@@ -53,7 +53,7 @@
                 },
                 classes: {
                     enumerable: true,
-                    value: classes.supported
+                    value: common.supportsClasses
                 },
                 customizedBuiltInElements: {
                     enumerable: true,
@@ -114,9 +114,9 @@
      * no native customElements implementation at all.
      */
 
-    baseElementConstructor = require('./base-element-constructor');
-    builtInElements = require('./built-in-elements');
-    reactions = require('./reactions');
+    baseElementConstructor = require('./lib/base-element-constructor');
+    builtInElements = require('./lib/built-in-elements');
+    reactions = require('./lib/reactions');
 
     (function () {
 
@@ -149,8 +149,8 @@
 
     })();
 
-    CustomElementRegistry = require('./custom-element-registry');
-    shims = require('./shims');
+    CustomElementRegistry = require('./lib/custom-element-registry');
+    shims = require('./lib/shims');
 
     registry = new CustomElementRegistry();
 
@@ -190,8 +190,9 @@
     }
 
 })(typeof global !== 'undefined' ? global : (typeof self !== 'undefined' ? self : (typeof window !== 'undefined' ? window : {})));
+
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./base-element-constructor":2,"./built-in-elements":3,"./classes":4,"./common":5,"./custom-element-registry":10,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./other-polyfills/Array.from":13,"./other-polyfills/DOMException":14,"./reactions":16,"./shims":17}],2:[function(require,module,exports){
+},{"./lib/base-element-constructor":2,"./lib/built-in-elements":3,"./lib/classes":4,"./lib/common":5,"./lib/custom-element-registry":10,"./lib/is-valid-custom-element-name":11,"./lib/native-custom-elements":12,"./lib/other-polyfills/Array.from":13,"./lib/other-polyfills/DOMException":14,"./lib/reactions":16,"./lib/shims":17}],2:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
@@ -200,6 +201,7 @@ var common = require('./common'),
     CustomElementProperties = require('./custom-element-properties'),
     reactions = require('./reactions'),
     
+    ALREADY_CONSTRUCTED = Object.create(null),
     DOMException = window.DOMException,
     getPrototypeOf = Object.getPrototypeOf,
     setPrototypeOf = Object.setPrototypeOf,
@@ -294,7 +296,7 @@ module.exports = function baseElementConstructor(activeFunction) {
 
     // 9.   If `element` is an already constructed marker, then throw an "InvalidStateError"
     //      DOMException and abort these steps.
-    if (element === common.alreadyConstructedMarker) {
+    if (element === ALREADY_CONSTRUCTED) {
         throw new DOMException("Failed to construct 'CustomElement': Cannot create custom element <" + definition.name + (definition.isBuiltIn ? ' is="' + definition.localName + '"' : '') + "> from within its own custom element constructor.", 'InvalidStateError');
     }
 
@@ -311,11 +313,11 @@ module.exports = function baseElementConstructor(activeFunction) {
 
     // 11.  Replace the last entry in `definition`'s construction stack with an
     //      already constructed marker.
-    definition.constructionStack[i] = common.alreadyConstructedMarker;
+    definition.constructionStack[i] = ALREADY_CONSTRUCTED;
 
     // 12.  Return `element`.
     return element;
-}
+};
 
 },{"./common":5,"./conformance":6,"./custom-element-definition":8,"./custom-element-properties":9,"./reactions":16}],3:[function(require,module,exports){
 'use strict';
@@ -495,29 +497,18 @@ module.exports = {
 var common = require('./common'),
     PrivatePropertyStore = require('./private-property-store'),
 
+    Object = window.Object,
+
     arrayFrom = Array.from,
     copyProperties = common.copyProperties,
-    Function_toString = Function.prototype.toString,
+    defineProperties = Object.defineProperties,
     getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
     getPrototypeOf = Object.getPrototypeOf,
     globalEval = window.eval,
-    hasOwnProperty = common.hasOwnProperty,
     ObjectProto = Object.prototype,
     Object_create = Object.create,
-    Object_toString = ObjectProto.toString,
     proxies = new PrivatePropertyStore('ClassProxy'),
-    reg_ctorName = /^\s*(?:class|function)\s+([^\s\{\(]+)/,
-    reg_objName = /^\[object (.+)\]$/,
-    String = window.String,
-    supportsClasses = (function () {
-        try {
-            globalEval('(function(){return class A{};})()');
-            return true;
-        } catch (ex) {
-            return false;
-        }
-    })(),
-    toStringTag = window.Symbol && typeof window.Symbol.toStringTag === 'symbol' ? window.Symbol.toStringTag : null;
+    supportsClasses = common.supportsClasses;
 
 /**
  * Creates a new ClassProxy.
@@ -562,6 +553,7 @@ function ClassProxy(constructor, finalConstructor) {
         }
         return this;
     } else if (!this.wasFunction) {
+        this.finalConstructor = constructor;
         this.isClass = true;
         return this;
     }
@@ -616,7 +608,7 @@ function ClassProxy(constructor, finalConstructor) {
     }
 }
 
-Object.defineProperties(ClassProxy.prototype, {
+defineProperties(ClassProxy.prototype, {
     constructor: {
         value: ClassProxy
     },
@@ -678,61 +670,6 @@ function initElementSubclass(constructor, preConstructor, thisArg, args) {
 }
 
 /**
- * @param {object} target
- * @returns {string}
- */
-function getClassName(target) {
-    var constructor, proto, name, match;
-    if (!(target instanceof Object)) {
-        return null;
-    }
-
-    if (typeof target === 'function') {
-        constructor = target;
-        proto = target.prototype;
-        target = null;
-        if (!(proto instanceof Object)) {
-            return null;
-        }
-    } else {
-        if (toStringTag && hasOwnProperty(target, toStringTag)) {
-            name = String(target[toStringTag] || '');
-            if (name) {
-                return name;
-            }
-        }
-        proto = getPrototypeOf(target);
-        if (!proto || proto === ObjectProto) {
-            return 'Object';
-        }
-        constructor = typeof target.constructor === 'function' ? target.constructor : null;
-        if (constructor && target === constructor.prototype) {
-            target = null;
-        }
-    }
-
-    if (toStringTag && proto && hasOwnProperty(proto, toStringTag)) {
-        name = String(proto[toStringTag] || '');
-        if (name) {
-            return name;
-        }
-    }
-    if (constructor) {
-        name = String(constructor.name || '');
-        if (name) {
-            return name;
-        }
-        match = reg_ctorName.exec(Function_toString.call(constructor));
-        name = match && match[1];
-        if (name) {
-            return name;
-        }
-    }
-    match = reg_objName.exec(Object_toString.call(target));
-    return (match && match[1]) || null;
-}
-
-/**
  * Returns true if the parameter is a function, and was defined using ES6 class
  * syntax; otherwise, returns false.
  * 
@@ -770,10 +707,8 @@ function proxy(constructor, finalConstructor) {
 }
 
 module.exports = {
-    getClassName: getClassName,
     isClass: isClass,
-    proxy: proxy,
-    supported: supportsClasses
+    proxy: proxy
 };
 
 },{"./common":5,"./private-property-store":15}],5:[function(require,module,exports){
@@ -791,10 +726,11 @@ var concat,
     iPO = Object.prototype.isPrototypeOf,
 
     abs = Math.abs,
-    alreadyConstructedMarker = {},
     document = window.document,
     Document_get_readyState = getOwnPropertyDescriptor(window.Document.prototype, 'readyState').get,
+    exp,
     floor = Math.floor,
+    globalEval = window.eval,
     isFinite = window.isFinite,
     isNaN = window.isNaN,
     mainDocumentReady = false,
@@ -808,7 +744,16 @@ var concat,
      */
     nextElementIsSynchronous = false,
     Number = window.Number,
-    shimStack = 0;
+    setTimeout = window.setTimeout,
+    shimStack = 0,
+    supportsClasses = (function () {
+        try {
+            globalEval('(function(){return class A{};})()');
+            return true;
+        } catch (ex) {
+            return false;
+        }
+    })();
 
 if (!getOwnPropertyDescriptors) {
     concat = Array.prototype.concat;
@@ -832,23 +777,6 @@ if (!getOwnPropertyDescriptors) {
         value: getOwnPropertyDescriptors,
         writable: true
     });
-}
-
-/**
- * @private
- * @param {object} value
- * @returns {number}
- */
-function toLength(value) {
-    var len = Number(value);
-    if (isNaN(len)) {
-        return 0;
-    }
-    if (len === 0 || !isFinite(len)) {
-        return len;
-    }
-    len = (len > 0 ? 1 : -1) * floor(abs(len));
-    return min(max(len, 0), maxSafeInteger);
 }
 
 /**
@@ -888,7 +816,7 @@ function copyProperties(from, to) {
             toDescriptor = hasOwn ? getOwnPropertyDescriptor(to, name) : null;
             if (!toDescriptor || toDescriptor.configurable) {
                 toDescriptors[name] = fromDescriptors[name];
-            } else if (toDescriptor.writable) {
+            } else if (toDescriptor && toDescriptor.writable) {
                 to[name] = from[name];
             }
         }
@@ -925,63 +853,83 @@ function isPrototypeOf(proto, O) {
     return iPO.call(proto, O);
 }
 
-module.exports = defineProperties({}, {
-    alreadyConstructedMarker: {
-        value: alreadyConstructedMarker
-    },
-    arrayContains: {
-        value: arrayContains
-    },
-    callbackNames: {
-        value: {
-            adopted: 'adoptedCallback',
-            attributeChanged: 'attributeChangedCallback',
-            connected: 'connectedCallback',
-            disconnected: 'disconnectedCallback',
+/**
+ * @private
+ * @param {object} value
+ * @returns {number}
+ */
+function toLength(value) {
+    var len = Number(value);
+    if (isNaN(len)) {
+        return 0;
+    }
+    if (len === 0 || !isFinite(len)) {
+        return len;
+    }
+    len = (len > 0 ? 1 : -1) * floor(abs(len));
+    return min(max(len, 0), maxSafeInteger);
+}
 
-            all: ['adoptedCallback', 'attributeChangedCallback', 'connectedCallback', 'disconnectedCallback']
-        }
+exp = {
+    arrayContains: arrayContains,
+    callbackNames: {
+        adopted: 'adoptedCallback',
+        attributeChanged: 'attributeChangedCallback',
+        connected: 'connectedCallback',
+        disconnected: 'disconnectedCallback',
+        all: ['adoptedCallback', 'attributeChangedCallback', 'connectedCallback', 'disconnectedCallback']
     },
     conformanceStatus: {
-        value: {
-            NONE: 0,
-            STARTED: 1,
-            CANCELED: 2,
-            FAILED: 3,
-            PASSED: 4
-        }
+        NONE: 0,
+        STARTED: 1,
+        CANCELED: 2,
+        FAILED: 3,
+        PASSED: 4
     },
-    copyProperties: {
-        value: copyProperties
+    copyProperties: copyProperties,
+    decrementShimStack: function decrementShimStack() {
+        shimStack--;
     },
-    decrementShimStack: {
-        value: function () {
-            shimStack--;
-        }
+    hasOwnProperty: hasOwnProperty,
+    htmlNamespace: 'http://www.w3.org/1999/xhtml',
+    illegalConstructor: 'Illegal constructor',
+    illegalInvocation: 'Illegal invocation',
+    incrementShimStack: function incrementShimStack() {
+        shimStack++;
     },
-    hasOwnProperty: {
-        value: hasOwnProperty
+    isDocumentReady: isDocumentReady,
+    isPrototypeOf: isPrototypeOf,
+    states: {
+        /**
+         * Indicates an autonomous custom element or customized built-in element
+         * which has been successfully constructed or upgraded in accordance with
+         * its custom element definition.
+         */
+        custom: 'custom',
+        /**
+         * Indicates an autonomous custom element or customized built-in element
+         * which could not be constructed or upgraded because its custom element
+         * constructor threw an exception.
+         */
+        failed: 'failed',
+        /**
+         * Indicates a built-in element or HTMLUnknownElement, i.e. an element that
+         * is not (and cannot be) customized.
+         */
+        uncustomized: 'uncustomized',
+        /**
+         * Indicates an autonomous custom element or customized built-in element
+         * which has not yet been upgraded.
+         */
+        undefined: 'undefined'
     },
-    htmlNamespace: {
-        value: 'http://www.w3.org/1999/xhtml'
-    },
-    illegalConstructor: {
-        value: 'Illegal constructor'
-    },
-    illegalInvocation: {
-        value: 'Illegal invocation'
-    },
-    incrementShimStack: {
-        value: function () {
-            shimStack++;
-        }
-    },
-    isDocumentReady: {
-        value: isDocumentReady
-    },
-    isPrototypeOf: {
-        value: isPrototypeOf
-    },
+    supportsClasses: supportsClasses,
+    throwAsync: function throwAsync(error) {
+        setTimeout(function (er) { throw er; }, 0, error);
+    }
+};
+
+module.exports = defineProperties(exp, {
     mainDocumentReady: {
         get: function () {
             return mainDocumentReady;
@@ -996,37 +944,6 @@ module.exports = defineProperties({}, {
         },
         set: function (value) {
             nextElementIsSynchronous = !!value;
-        }
-    },
-    states: {
-        value: {
-            /**
-             * Indicates an autonomous custom element or customized built-in element
-             * which has been successfully constructed or upgraded in accordance with
-             * its custom element definition.
-             */
-            custom: 'custom',
-            /**
-             * Indicates an autonomous custom element or customized built-in element
-             * which could not be constructed or upgraded because its custom element
-             * constructor threw an exception.
-             */
-            failed: 'failed',
-            /**
-             * Indicates a built-in element or HTMLUnknownElement, i.e. an element that
-             * is not (and cannot be) customized.
-             */
-            uncustomized: 'uncustomized',
-            /**
-             * Indicates an autonomous custom element or customized built-in element
-             * which has not yet been upgraded.
-             */
-            undefined: 'undefined'
-        }
-    },
-    throwAsync: {
-        value: function throwAsync(error) {
-            setTimeout(function () { throw this; }.bind(error));
         }
     },
     usingReactionApi: {
@@ -1933,7 +1850,7 @@ CustomElementRegistry = (function () {
         instance = this;
     }
 
-    if (classes.supported) {
+    if (common.supportsClasses) {
         // If ES6 classes are supported, we need to ensure that CustomElementRegistry
         // is defined as a class, so its 'prototype' property is not writable.
         return eval("(function(){return function(init){return class CustomElementRegistry{constructor(){init.call(this);}};};})()")(CustomElementRegistry);
@@ -2241,7 +2158,7 @@ CustomElementRegistry.prototype.whenDefined = function whenDefined(name) {
         return Promise_reject(new TypeError(methodError('whenDefined', common.illegalInvocation)));
     }
     if (arguments.length === 0) {
-        return Promise_reject(new TypeError(methodError('whenDefined', '1 argument required, but only 0 present.')))
+        return Promise_reject(new TypeError(methodError('whenDefined', '1 argument required, but only 0 present.')));
     }
 
     name = String(name);
@@ -2316,13 +2233,13 @@ module.exports = isValidCustomElementName;
 },{}],12:[function(require,module,exports){
 'use strict';
 
-var classes = require('./classes'),
+var common = require('./common'),
     globalEval = window.eval,
     instance, prototype, define, get, whenDefined;
 
 // If the browser doesn't support ES6 classes, then it's guaranteed that the browser
 // also doesn't have a native custom elements implementation.
-if (classes.supported && typeof window.CustomElementRegistry === 'function' && window.customElements instanceof window.CustomElementRegistry) {
+if (common.supportsClasses && typeof window.CustomElementRegistry === 'function' && window.customElements instanceof window.CustomElementRegistry) {
     instance = window.customElements;
     prototype = window.CustomElementRegistry.prototype;
     define = prototype.define.bind(instance);
@@ -2352,7 +2269,7 @@ if (classes.supported && typeof window.CustomElementRegistry === 'function' && w
     module.exports = false;
 }
 
-},{"./classes":4}],13:[function(require,module,exports){
+},{"./common":5}],13:[function(require,module,exports){
 module.exports = (function () {
     var toStr, isCallable, toInteger, maxSafeInteger, toLength, from;
     if (typeof Array.from === 'function') {
@@ -3259,7 +3176,7 @@ function enqueueCallbackReaction(element, callbackName, args) {
         return;
     }
 
-    props = CustomElementProperties.get(element)
+    props = CustomElementProperties.get(element);
     if (!props || props.state === states.failed) {
         return;
     }
@@ -4409,7 +4326,7 @@ shim(window.HTMLModElement,
     'cite', 'dateTime');
 shim(window.HTMLObjectElement,
     'align', 'archive', 'border', 'code', 'codeBase', 'codeType', 'data', 'declare', 'height', 'hspace', 'name',
-    'standby', 'type', 'typeMustMatch', 'useMap', 'vspace', 'width')
+    'standby', 'type', 'typeMustMatch', 'useMap', 'vspace', 'width');
 shim(window.HTMLOListElement,
     'reversed', 'start', 'type');
 shim(window.HTMLOptGroupElement,

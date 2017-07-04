@@ -1,9 +1,9 @@
-/// <reference path="../node_modules/expect.js/index.js" />
-/// <reference path="../node_modules/mocha/mocha.js" />
-
 'use strict';
 
-var util = require('./util'),
+require('mocha');
+
+var expect = require('expect.js'),
+    util = require('../util'),
         
     supportsClasses = util.supportsClasses;
 

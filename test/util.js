@@ -1,10 +1,15 @@
 'use strict';
 
-require('expect.js')
+var expect = require('expect.js'),
 
-var builtInElements = require('../lib/browser/built-in-elements'),
-    concat,
+    ObjectProto = Object.prototype,
+
+    Array_concat = Array.prototype.concat,
+    Array_slice = Array.prototype.slice,
+    callbackNames = ['adoptedCallback', 'attributeChangedCallback', 'connectedCallback', 'disconnectedCallback'],
     container = document.getElementById('test-container'),
+    defineProperties = Object.defineProperties,
+    defineProperty = Object.defineProperty,
     definitions = {},
     domExCodes = {
         IndexSizeError: 1,
@@ -33,6 +38,9 @@ var builtInElements = require('../lib/browser/built-in-elements'),
     getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors,
     getOwnPropertyNames = Object.getOwnPropertyNames,
     getOwnPropertySymbols = Object.getOwnPropertySymbols || function () { return []; },
+    getPrototypeOf = Object.getPrototypeOf,
+    globalEval = window.eval,
+    hOP = Object.prototype.hasOwnProperty,
     invalidTagNames = [
         'div',
         'hello',
@@ -40,6 +48,7 @@ var builtInElements = require('../lib/browser/built-in-elements'),
         'name-with-exclamation-point!',
         'name-with:colon'
     ],
+    isArray = Array.isArray,
     nameIncrement = 0,
     reg_n1 = /[^a-zA-Z]([a-z])/g,
     reg_n2 = /[^\w\$\-]/g,
@@ -56,7 +65,7 @@ var builtInElements = require('../lib/browser/built-in-elements'),
     ],
     supportsClasses = (function () {
         try {
-            eval('class A{}');
+            globalEval('(function(){return class A{};})()');
             return true;
         } catch (ex) {
             return false;
@@ -69,9 +78,8 @@ var builtInElements = require('../lib/browser/built-in-elements'),
     ];
 
 if (!getOwnPropertyDescriptors) {
-    concat = Array.prototype.concat;
     getOwnPropertyDescriptors = function getOwnPropertyDescriptors(O) {
-        var keys = concat.call(getOwnPropertyNames(O), getOwnPropertySymbols(O)),
+        var keys = Array_concat.call(getOwnPropertyNames(O), getOwnPropertySymbols(O)),
             i = 0,
             l = keys.length,
             result = {},
@@ -89,13 +97,61 @@ if (!getOwnPropertyDescriptors) {
 
 /**
  * @typedef {object} TestDefinitionOptions
- * 
- * @property {boolean} defineEarly - True if the custom element definition should be registered
- *   before the document is interactive; otherwise, false.
- * @property {?string} localName - The local name. For customized built-in elements, this should
- *   be the local name of the extended element (i.e. 'div'). For autonomous custom elements, this
- *   should be undefined or null.
+ * @property {boolean} defineEarly - True if the custom element definition should be registered before the document is interactive; otherwise, false.
+ * @property {?string} localName - The local name. For customized built-in elements, this should be the local name of the extended element (i.e. 'div'). For autonomous custom elements, this should be undefined or null.
  */
+
+/**
+ * Options used for quickly defining a custom element.
+ * @typedef {object} DefineElementOptions
+ * @property {boolean} asFunction - If this is true, then the custom element will be defined using plain "functional" class syntax. If this is false, then the custom element class will be defined using ES6 class syntax if the current environment supports it, or using "functional" class syntax otherwise. Defaults to false.
+ * @property {function} base - The base class extended by the custom element. If not provided, then this will be the base element interface represented by the 'localName' option (i.e. HTMLDivElement for a localName of "div"), or HTMLElement if no localName is provided.
+ * @property {function} constructor - The custom element constructor function. If not provided, then an empty constructor will be created.
+ * @property {string} name - The name of the custom element. If not provided, then a unique custom element name will be generated automatically.
+ * @property {string} localName - The localName of the custom element. If provided, it will be used to determine the base class extended by the custom element (unless a 'base' option is explicitly provided).
+ * @property {object} prototype - An optional plain object whose own properties will be copied onto the prototype object of the newly defined custom element.
+ */
+
+/**
+ * Describes the result of defining a custom element.
+ * @typedef {object} DefineElementResult
+ * @property {function} definedConstructor - The original constructor passed as the second argument to customElements.define().
+ * @property {function} finalConstructor - The final constructor returned from customElements.get() after the custom element is defined.
+ * @property {string} name - The custom element name.
+ * @property {*} returnValue - The return value from the call to customElements.define().
+ */
+
+/**
+ * @param {object} from
+ * @param {object} to
+ * @returns {object}
+ */
+function copyProperties(from, to) {
+    var toDescriptors = {},
+        fromDescriptors = getOwnPropertyDescriptors(from),
+        hasOwn, toDescriptor;
+    for (var name in fromDescriptors) {
+        if (name !== 'arguments' && name !== 'caller' && name !== 'length' && name !== 'prototype' && hasOwnProperty(fromDescriptors, name)) {
+            hasOwn = hasOwnProperty(to, name);
+            toDescriptor = hasOwn ? getOwnPropertyDescriptor(to, name) : null;
+            if (!toDescriptor || toDescriptor.configurable) {
+                toDescriptors[name] = fromDescriptors[name];
+            } else if (toDescriptor && toDescriptor.writable) {
+                to[name] = from[name];
+            }
+        }
+    }
+    return defineProperties(to, toDescriptors);
+}
+
+/**
+ * @param {object} O
+ * @param {string} p
+ * @returns {string}
+ */
+function hasOwnProperty(O, p) {
+    return hOP.call(O, p);
+}
 
 /**
  * @param {function} constructor
@@ -111,55 +167,91 @@ function constructorIsClass(constructor) {
 }
 
 /**
- * @param {object} [options]
- * @returns {function}
+ * Defines a custom element using the provided options.
+ * @param {DefineElementOptions} [options]
+ * @returns {DefineElementResult}
  */
 function defineElement(options) {
     var isClass = false,
-        rewriteAsClass, localName, name, constructor, interfaceConstructor, interfacePrototype, finalConstructor;
+        rewrite = true,
+        localName, name, base, interfaceConstructor, interfacePrototype, customConstructor,
+        source, definedConstructor, returnValue;
 
     options = Object(options == null ? {} : options);
-
-    rewriteAsClass = supportsClasses ? !!options.asClass : false;
+    
+    isClass = supportsClasses ? !options.asFunction : false;
     name = options.name || uniqueCustomElementName();
-    localName = options.localName || name;
-
-    interfaceConstructor = builtInElements[localName] || HTMLElement;
-    interfacePrototype = interfaceConstructor.prototype;
 
     if (options.hasOwnProperty('constructor') && typeof options.constructor === 'function') {
-        constructor = options.constructor;
-        isClass = constructorIsClass(constructor);
-        if (isClass) {
-            rewriteAsClass = false;
+        customConstructor = options.constructor;
+        if (constructorIsClass(customConstructor)) {
+            isClass = true;
+            rewrite = false;
+        } else {
+            base = getPrototypeOf(customConstructor.prototype);
+            if (base === null || base === ObjectProto) {
+                base = void 0;
+            } else {
+                base = null;
+                rewrite = false;
+            }
         }
-    } else {
-        constructor = function () { };
-    }
-    if (!isClass) {
-        constructor.prototype = Object.create(interfacePrototype);
-        constructor.prototype.constructor = constructor;
     }
 
-    if (rewriteAsClass) {
-        finalConstructor = eval("(function () { return function (a) { return class extends a { constructor() { super(); } }; }; })()")(constructor);
+    if (options.hasOwnProperty('base') && base === void 0 && (options.base == null || typeof options.base === 'function')) {
+        base = options.base || null;
+    }
+
+    if (options.localName) {
+        localName = options.localName;
     } else {
-        finalConstructor = constructor;
+        localName = name;
+        if (base === void 0) {
+            base = HTMLElement;
+        }
+    }
+
+    if (rewrite) {
+        if (isClass) {
+            source = '(function(){return function(a,b,c){return class';
+            if (base) {
+                source += ' extends c';
+            }
+            source += '{constructor(){';
+            if (base) {
+                source += 'super();';
+            }
+            if (customConstructor) {
+                source += 'a.apply(this,b(arguments));';
+            }
+            source += '}};};})()';
+            definedConstructor = globalEval(source)(customConstructor,Array.from,base);
+        } else {
+            definedConstructor = customConstructor || function () { };
+            if (base && base.prototype instanceof Object) {
+                definedConstructor.prototype = Object.create(base.prototype);
+                definedConstructor.prototype.constructor = definedConstructor;
+            }
+        }
+    } else {
+        definedConstructor = customConstructor;
     }
 
     if (options.hasOwnProperty('prototype') && options.prototype instanceof Object) {
-        Object.defineProperties(finalConstructor.prototype, Object.getOwnPropertyDescriptors(options.prototype));
+        copyProperties(options.prototype, definedConstructor.prototype);
     }
 
     if (name === localName) {
-        customElements.define(name, finalConstructor);
+        returnValue = customElements.define(name, definedConstructor);
     } else {
-        customElements.define(name, finalConstructor, { 'extends': localName });
+        returnValue = customElements.define(name, definedConstructor, { 'extends': localName });
     }
+
     return {
+        definedConstructor: definedConstructor,
         finalConstructor: customElements.get(name),
         name: name,
-        originalConstructor: constructor
+        returnValue: returnValue
     };
 }
 
@@ -195,75 +287,238 @@ function log(message) {
 }
 
 /**
- * @param {object} obj
- * @param {Array.<string>} [arrayProperties]
- * @returns {Array}
+ * @typedef {Object} PermutatedProperty
+ * @property {number} index
+ * @property {number} maxIndex
+ * @property {Array} values
  */
-function permutate(obj, arrayProperties) {
-    var value, result, i, l, p, q, r, newObj, permutations;
+
+/**
+ * @param {PermutatedProperty} prop
+ * @returns {*}
+ */
+function getCurrentValue(prop) {
+    return prop.values[prop.index];
+}
+
+/**
+ * Creates an array containing all possible permutations of the properties of the provided object.
+ * 
+ * @param {object} obj - The object used to generate the permutations. Only the object's enumerable Array properties are permutated. Its remaining own properties will be present in each 
+ * 
+ * @returns {Array.<Object>} - An array where each element is a permutation of the properties from the original object.
+ */
+function permutate(obj) {
+    var descriptor, descriptors, key, keys, objIsArray, permutation, prop, props, result, template, value,
+        i, k, l, p, r;
     if (obj == null) {
-        return [];
+        return [{}];
     }
-    if (!(arrayProperties instanceof Array)) {
-        arrayProperties = null;
-    }
-    obj = Object(obj);
-    for (var prop in obj) {
-        value = obj[prop];
-        if (value instanceof Array && (!arrayProperties || arrayProperties.indexOf(prop) === -1)) {
-            result = [];
-            r = 0;
-            for (i = 0, l = value.length; i < l; i++) {
-                newObj = {};
-                for (var copyProp in obj) {
-                    if (prop !== copyProp) {
-                        newObj[copyProp] = obj[copyProp];
-                    }
-                }
-                newObj[prop] = value[i];
-                permutations = permutate(newObj, arrayProperties);
-                for (p = 0, q = permutations.length; p < q; p++) {
-                    result[r++] = permutations[p];
-                }
+
+    objIsArray = isArray(obj);
+    descriptors = getOwnPropertyDescriptors(obj);
+    keys = Array_concat.call(getOwnPropertyNames(descriptors), getOwnPropertySymbols(descriptors));
+    i = 0;
+    k = keys.length;
+    props = [];
+    p = 0;
+    template = objIsArray ? [] : {};
+    while (i < k) {
+        key = keys[i++];
+        descriptor = descriptors[key];
+        if (descriptor.enumerable) {
+            value = obj[key];
+            l = isArray(value) ? value.length : 0;
+            if (l > 0) {
+                prop = {
+                    index: 0,
+                    maxIndex: l - 1,
+                    values: Array_slice.call(value)
+                };
+                defineProperty(template, key, {
+                    get: getCurrentValue.bind(null, prop)
+                });
+                props[p++] = prop;
+            } else {
+                template[key] = value;
             }
-            return result;
         }
     }
-    return [obj];
+
+    if (p === 0) {
+        return objIsArray ? Array_slice.call(obj) : [obj];
+    }
+
+    result = [];
+    r = 0;
+    while (prop) {
+        i = 0;
+        permutation = {};
+        while (i < k) {
+            key = keys[i++];
+            permutation[key] = template[key];
+        }
+        result[r++] = permutation;
+
+        i = 0;
+        while (i < p) {
+            prop = props[i];
+            if (prop.index < prop.maxIndex) {
+                prop.index++;
+                while (i--) {
+                    props[i].index = 0;
+                }
+                break;
+            }
+            prop = null;
+            i++;
+        }
+    }
+    return result;
 }
+
+/**
+ * Creates a new callback.
+ * 
+ * @class Callback
+ * @classdesc Represents a custom element lifecycle callback.
+ * 
+ * @param {string} name - The name of the callback.
+ * @param {Array} args - The arguments passed to or expected by the callback.
+ * 
+ * @property {string} name - The name of the callback.
+ * @property {Array} [args] - The arguments passed to (or expected by) the callback.
+ */
+function Callback(name, args) {
+    this.name = name;
+    this.args = args || [];
+}
+
+/**
+ * Determines whether or not two Callbacks are equal.
+ * 
+ * @param {Callback} other - The other Callback to compare to the current instance.
+ * 
+ * @returns {boolean} - True if the other Callback is equal to the current instance; otherwise, false.
+ */
+Callback.prototype.equals = function equals(other) {
+    var i;
+    if (this.name !== other.name || this.args.length !== other.args.length) {
+        return false;
+    }
+    i = this.args.length;
+    while (i--) {
+        if (this.args[i] !== other.args[i]) {
+            return false;
+        }
+    }
+    return true;
+};
 
 /**
  * @param {string} name
- * @param {function} action
+ * @param {Array} args
  */
-function shouldThrowDOMException(name, action) {
-    var code;
-    if (typeof name === 'function') {
-        action = name;
-        name = null;
+function reportCallback(name, args) {
+    var callback = new Callback(name, args);
+    
+}
+
+/**
+ * Asserts that the given promise is eventually rejected, optionally asserting that the rejection value is of a specified type and has a specified 'name' property.
+ * 
+ * @param {Promise} promise - The promise.
+ * @param {?function} errorType - The expected type of the error.
+ * @param {string} errorName - The expected name of the error.
+ * @param {function} callback - The callback that is executed when the promise is resolved or rejected. Its arguments are (1) the assertion error, if one was thrown, and (2) the rejection value, if the promise was rejected.
+ */
+function shouldRejectWith(promise, errorType, errorName, callback) {
+    expect(promise).to.be.a(Promise);
+    if (typeof errorName === 'function') {
+        callback = errorName;
+        errorName = null;
     }
-    if (name) {
-        code = domExCodes[name];
-        if (!code) {
-            throw new Error("'" + name + "' is not a valid DOMException name.");
+    promise.then(function () {
+        callback(new Error('Expected Promise to be rejected; was resolved instead'));
+    }, function (value) {
+        var isDOMException = errorType === DOMException,
+            code;
+        if (errorType) {
+            try {
+                expect(value).to.be.a(errorType);
+                if (errorName) {
+                    expect(value.name).to.be(errorName);
+                    if (errorType === DOMException) {
+                        code = domExCodes[errorName];
+                        if (code) {
+                            expect(value.code).to.be(code);
+                        }
+                    }
+                }
+            } catch (ex) {
+                callback(ex, value);
+            }
         }
-    }
-    return expect(action).to.throwException(function (ex) {
-        expect(ex).to.be.a(DOMException);
-        if (name) {
-            expect(ex.code).to.be(code);
-            expect(ex.name).to.be(name);
-        }
+        callback(null, value);
     });
 }
 
 /**
- * @param {function} action
+ * Asserts that the given promise is eventually resolved, optionally asserting that the resolved value is of a specified type.
+ * 
+ * @param {Promise} promise - The promise.
+ * @param {function|string} resolvedType - The expected type of the resolved value.
+ * @param {function} callback - The callback that is executed when the promise is resolved or rejected. Its arguments are (1) the assertion error, if one was thrown, and (2) the resolved value, if the promise was resolved.
  */
-function shouldThrowTypeError(action) {
-    return expect(action).to.throwException(function (ex) {
-        expect(ex).to.be.a(TypeError);
+function shouldResolveWith(promise, resolvedType, callback) {
+    expect(promise).to.be.a(Promise);
+    promise.then(function (value) {
+        if (resolvedType) {
+            try {
+                expect(value).to.be.a(resolvedType);
+            } catch (ex) {
+                callback(ex, value);
+                return;
+            }
+        }
+        callback(null, value);
+    }, function (error) {
+        callback(new Error('Expected Promise to be resolved; was rejected instead' + (error ? ' (' + String(error) + ')' : '')));
     });
+}
+
+/**
+ * Asserts that executing the provided function should throw an error, optionally asserting the type and name of the thrown error.
+ * 
+ * @param {function} errorType - The expected type of the thrown error.
+ * @param {string} errorName - The expected name of the thrown error.
+ * @param {function} action - The function whose execution is expected to throw an error.
+ */
+function shouldThrow(errorType, errorName, action) {
+    var code, callback;
+    if (arguments.length === 1) {
+        action = errorType;
+        errorType = null;
+    } else if (typeof errorName === 'function') {
+        action = errorName;
+        errorName = null;
+    } else if (errorName) {
+        code = domExCodes[name];
+    }
+    if (errorType || errorName) {
+        return expect(action).to.throwException(function (ex) {
+            if (errorType) {
+                expect(ex).to.be.a(errorType);
+            }
+            if (errorName) {
+                expect(ex.name).to.be(errorName);
+                if (code) {
+                    expect(ex.code).to.be(code);
+                }
+            }
+        });
+    }
+    return expect(action).to.throwException();
 }
 
 /**
@@ -309,7 +564,7 @@ function TestElement(options) {
     Object.defineProperties(this, {
         basePrototype: {
             enumerable: true,
-            value: (builtInElements[localName] || HTMLElement).prototype
+            value: options.basePrototype || HTMLElement.prototype
         },
         localName: {
             enumerable: true,
@@ -333,6 +588,7 @@ function TestElement(options) {
 
 module.exports = {
     constructorIsClass: constructorIsClass,
+    container: container,
     defineElement: defineElement,
     domExCodes: domExCodes,
     flattenTitles: flattenTitles,
@@ -340,8 +596,9 @@ module.exports = {
     log: log,
     permutate: permutate,
     reservedTagNames: reservedTagNames,
-    shouldThrowDOMException: shouldThrowDOMException,
-    shouldThrowTypeError: shouldThrowTypeError,
+    shouldRejectWith: shouldRejectWith,
+    shouldResolveWith: shouldResolveWith,
+    shouldThrow: shouldThrow,
     supportsClasses: supportsClasses,
     TestElement: TestElement,
     uniqueCustomElementName: uniqueCustomElementName,
