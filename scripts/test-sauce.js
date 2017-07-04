@@ -71,7 +71,7 @@ function checkJobs(test) {
         console.log('Status request #' + test.checkCount + ':');
 
         try {
-            response = JSON.parse(responseData);
+            response = responseData instanceof Object ? responseData : JSON.parse(String(responseData));
             jobs = response && response['js tests'];
             if (!Array.isArray(jobs)) {
                 throw new Error('Could not parse API response.');
@@ -149,7 +149,7 @@ function runSauceTests(options) {
         }
 
         try {
-            response = JSON.parse(responseData);
+            response = responseData instanceof Object ? responseData : JSON.parse(String(responseData));
             jobs = response && response['js tests'];
             if (!Array.isArray(jobs)) {
                 throw new Error('Could not parse API response.');
