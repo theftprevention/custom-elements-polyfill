@@ -18,7 +18,7 @@ const
         };
     })(),
     isArray = Array.isArray,
-    pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')),
+    pkg = require('./package.json'),
     reg_version = /\{VERSION_PLACEHOLDER\}/g,
     toLower = (function () {
         var S = String,

@@ -44,8 +44,9 @@ const
 /**
  * @param {Error} err 
  */
-function reportError(err) {
+function onError(err) {
     console.error(err);
+    process.exit(-1);
 }
 
 /**
@@ -61,7 +62,7 @@ function defer() {
             reject = n;
         });
     return {
-        promise: promise.then(null, reportError),
+        promise: promise,
         resolve: resolve,
         reject: reject
     };
@@ -181,6 +182,6 @@ function minify(source) {
 }
 
 module.exports = lint()
-    .then(bundle, reportError)
-    .then(minify, reportError)
-    .then(function () { console.log('[build-polyfill] Polyfill build complete.'); }, reportError);
+    .then(bundle, onError)
+    .then(minify, onError)
+    .then(function () { console.log('[build-polyfill] Polyfill build complete.'); }, onError);

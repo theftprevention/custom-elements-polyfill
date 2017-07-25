@@ -3,31 +3,21 @@
 require('mocha');
 
 var expect = require('expect.js'),
-    util = require('./util'),
+    util,
 
+    loaded = false,
     mochaContainer = document.getElementById('mocha'),
-    flattenTitles = util.flattenTitles,
-    log = util.log,
-    ready = false,
-    reports = [],
-    TestElement = util.TestElement;
+    reportContainer,
+    runner = null,
+    startTime = new Date();
 
 /**
  * @param {Error} error
  * @param {string} [title]
  */
-function internalError(error, title) {
+function initError(error, title) {
     var now = new Date(),
-        description, div, h2, pre;
-
-    if (error instanceof Error) {
-        title = title || error.message;
-        description = error.stack;
-    } else if (arguments.length > 1) {
-        description = error;
-    } else {
-        title = error;
-    }
+        div, h2, pre;
 
     div = document.createElement('div');
     div.className = 'test fail';
@@ -36,17 +26,17 @@ function internalError(error, title) {
     h2.appendChild(document.createTextNode(title));
     div.appendChild(h2);
 
-    if (description) {
+    if (error.stack) {
         pre = document.createElement('pre');
         pre.className = 'error';
-        pre.appendChild(document.createTextNode(description));
+        pre.appendChild(document.createTextNode(error.stack));
         div.appendChild(pre);
     }
 
     mochaContainer.appendChild(div);
 
     window.mochaResults = {
-        duration: now - util.startTime,
+        duration: now - startTime,
         end: now,
         failures: 1,
         passes: 0,
@@ -56,96 +46,68 @@ function internalError(error, title) {
                 message: error.message || title,
                 name: title,
                 result: false,
-                stack: description
+                stack: error.stack
             }
         ],
-        start: util.startTime,
+        start: startTime,
         suites: 0,
         tests: 1
     };
 }
 
-/**
- * @param {Mocha.Test} test
- * @param {Error} [err]
- */
-function logResult(test, err) {
-    var passed = !err,
-        report;
-    if (!passed) {
-        report = {
-            message: err.message || String(err),
-            name: flattenTitles(test),
-            result: false
-        };
-        if (err.stack) {
-            report.stack = err.stack;
-        }
-        reports.push(report);
-    }
-}
-
-function onDocumentReady() {
-    log('Document ready.');
-}
-
-function runTests() {
-    var runner;
-
-    log('Starting tests.');
-    runner = mocha.run();
-
-    runner.on('end', function () {
-        var results = runner.stats;
-        results.reports = reports;
-        window.mochaResults = results;
-        log('Tests complete: ' + results.failures + ' failed, ' + results.passes + ' passed, ' + (results.failures + results.passes) + ' total');
-    });
-    runner.on('fail', logResult);
-    runner.on('pass', logResult);
-
-    //util.permutate({
-    //    defineEarly: [true, false],
-    //    isClass: util.supportsClasses ? [true, false] : false,
-    //    localName: builtInElements.tagNames.concat(null)
-    //}, [
-    //'observedAttributes'
-    //]).forEach(function (options) {
-    //    new TestElement(options);
-    //});
-    //log('Test elements attached.');
-}
-
-util.startTime = new Date();
 mocha.setup('bdd');
 
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', onDocumentReady, false);
-} else {
-    onDocumentReady();
-}
-
 try {
-    require('../dist/custom-elements-polyfill.min.js');
+
+    util = require('./common/util');
+
     try {
+        require('../dist/custom-elements-polyfill.js');
 
-        require('./spec/global');
-        require('./spec/CustomElementRegistry');
-        require('./spec/define');
-        require('./spec/get');
-        require('./spec/whenDefined');
+        try {
+            require('./spec/global');
+            require('./spec/CustomElementRegistry');
+            require('./spec/define');
+            require('./spec/get');
+            require('./spec/whenDefined');
 
-        require('./spec/constructors');
+            require('./spec/constructors');
 
-        ready = true;
+            loaded = true;
+        } catch (error) {
+            initError(error, 'Tests failed to load');
+        }
 
     } catch (error) {
-        internalError(error, 'Tests failed to load');
+        initError(error, 'Polyfill failed to load');
     }
+
 } catch (error) {
-    internalError(error, 'Polyfill failed to load');
+    initError(error, 'Test utility library failed to load');
 }
 
-if (ready) {
-    runTests();
+if (loaded) {
+
+    util.runner = runner = mocha.run();
+    window.onerror = null;
+    reportContainer = document.getElementById('mocha-report');
+    mochaContainer.removeChild(reportContainer);
+
+    runner.on('end', function () {
+        var stats = runner.stats;
+
+        mochaContainer.appendChild(reportContainer);
+
+        // Sauce labs has trouble with large error lists and may refuse to show them.
+        stats.reports = util.reports.slice(0, 10);
+        window.mochaResults = stats;
+
+        console.group('Tests complete');
+        console.log('Passed: %o', stats.passes);
+        console.log('Failed: %o', stats.failures);
+        console.groupEnd();
+    });
+    runner.on('fail', util.onTestComplete);
+    runner.on('pass', util.onTestComplete);
+
 }

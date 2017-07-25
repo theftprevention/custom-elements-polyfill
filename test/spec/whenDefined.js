@@ -3,7 +3,7 @@
 require('mocha');
 
 var expect = require('expect.js'),
-    util = require('../util'),
+    util = require('../common/util'),
 
     defineElement = util.defineElement,
     domExCodes = util.domExCodes,

@@ -7,6 +7,7 @@
     require('./lib/other-polyfills/DOMException');
 
     var common = require('./lib/common'),
+
         baseElementConstructor,
         builtInElements,
         classes,
@@ -120,31 +121,34 @@
 
     (function () {
 
-        /**
+        /*
          * The routine below patches the native HTML element interfaces (HTMLAnchorElement,
          * HTMLDivElement, etc) so they can serve as bases for user-defined classes in
          * cooperation with the ES6 class proxying mechanism defined in the 'classes' module.
          */
 
-        var names = builtInElements.interfaceNames,
+        var interfaces = builtInElements.interfaces,
             i = 0,
-            l = names.length,
+            l = interfaces.length,
             HTMLElement = window.HTMLElement,
-            name, interf, finalConstructor;
+            name, interf, ctor, finalConstructor;
 
         window.HTMLElement = classes.proxy(HTMLElement, (nativeCustomElements ? window.HTMLElement : function () {
             return baseElementConstructor.call(this, HTMLElement);
         }));
 
         while (i < l) {
-            name = names[i++];
-            interf = builtInElements.constructorFromInterfaceName(name);
-            finalConstructor = nativeCustomElements && nativeCustomElements.canExtend ? interf : (function (a) {
-                return function () {
-                    return baseElementConstructor.call(this, a);
-                };
-            })(interf);
-            window[name] = classes.proxy(interf, finalConstructor);
+            interf = interfaces[i++];
+            name = interf.name;
+            if (name) {
+                ctor = interf.constructor;
+                finalConstructor = nativeCustomElements && nativeCustomElements.canExtend ? ctor : (function (a) {
+                    return function () {
+                        return baseElementConstructor.call(this, a);
+                    };
+                })(ctor);
+                window[name] = classes.proxy(ctor, finalConstructor);
+            }
         }
 
     })();
@@ -192,7 +196,21 @@
 })(typeof global !== 'undefined' ? global : (typeof self !== 'undefined' ? self : (typeof window !== 'undefined' ? window : {})));
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./lib/base-element-constructor":2,"./lib/built-in-elements":3,"./lib/classes":4,"./lib/common":5,"./lib/custom-element-registry":10,"./lib/is-valid-custom-element-name":11,"./lib/native-custom-elements":12,"./lib/other-polyfills/Array.from":13,"./lib/other-polyfills/DOMException":14,"./lib/reactions":16,"./lib/shims":17}],2:[function(require,module,exports){
+},{"./lib/base-element-constructor":3,"./lib/built-in-elements":4,"./lib/classes":5,"./lib/common":6,"./lib/custom-element-registry":11,"./lib/is-valid-custom-element-name":12,"./lib/native-custom-elements":13,"./lib/other-polyfills/Array.from":14,"./lib/other-polyfills/DOMException":15,"./lib/reactions":17,"./lib/shims":19}],2:[function(require,module,exports){
+'use strict';
+
+/*
+ * This module exports an array of known HTML tag names. It is used in
+ * the 'built-in-elements' module as a supplementary source of supported
+ * element interfaces.
+ * 
+ * This list is also used in the Mocha tests, and is the only source of
+ * elements for which tests are generated.
+ */
+
+module.exports = 'a,abbr,acronym,address,applet,area,article,aside,audio,b,base,basefont,bdi,bdo,bgsound,big,blink,blockquote,body,br,button,canvas,caption,center,cite,code,col,colgroup,command,content,data,datalist,dd,del,details,dfn,dialog,dir,div,dl,dt,element,em,embed,fieldset,figcaption,figure,font,footer,form,frame,frameset,h1,h2,h3,h4,h5,h6,head,header,hgroup,hr,html,i,iframe,image,img,input,ins,isindex,kbd,keygen,label,legend,li,link,listing,main,map,mark,marquee,menu,menuitem,meta,meter,multicol,nav,nextid,noembed,noscript,object,ol,optgroup,option,output,p,param,picture,plaintext,pre,progress,q,rp,rt,rtc,ruby,s,samp,script,section,select,shadow,slot,small,source,spacer,span,strike,strong,style,sub,summary,sup,table,tbody,td,template,textarea,tfoot,th,thead,time,title,tr,track,tt,u,ul,var,video,wbr,xmp'.split(',');
+
+},{}],3:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
@@ -319,179 +337,242 @@ module.exports = function baseElementConstructor(activeFunction) {
     return element;
 };
 
-},{"./common":5,"./conformance":6,"./custom-element-definition":8,"./custom-element-properties":9,"./reactions":16}],3:[function(require,module,exports){
+},{"./common":6,"./conformance":7,"./custom-element-definition":9,"./custom-element-properties":10,"./reactions":17}],4:[function(require,module,exports){
 'use strict';
 
-var common = require('./common'),
+/**
+ * @typedef {Object} ElementInterface
+ * @property {function} constructor
+ * @property {string} name
+ * @property {object} prototype
+ * @property {Array.<string>} tagNames
+ */
 
-    allTagNames,
-    constructorsByInterfaceName = {},
-    constructorsByTagName = {},
-    document = window.document,
-    Document_createElement = Document.prototype.createElement,
-    getOwnPropertyNames = Object.getOwnPropertyNames,
+var common = require('./common'),
+    isValidCustomElementName = require('./is-valid-custom-element-name'),
+    PrivatePropertyStore = require('./private-property-store'),
+    tagNames = require('../data/tag-names'),
+    
+    createElement = Document.prototype.createElement.bind(document),
+    getPrototypeOf = Object.getPrototypeOf,
     hasOwnProperty = common.hasOwnProperty,
     HTMLElement = window.HTMLElement,
     HTMLElementProto = HTMLElement.prototype,
-    interfaceNames,
     interfaces = [],
+    interfacesByName = Object.create(null),
+    interfacesByTagName = Object.create(null),
     isPrototypeOf = common.isPrototypeOf,
-    // 'predefinedTagNames' is an object where each key is the name of a native HTML element
-    // interface and each value is a string or an array of strings, each of which is the
-    // localName of an element that is known to implement that interface.
-    // 
-    // An empty array signifies that there are no tag names associated with the interface,
-    // meaning it will not be included in the mapping. This is generally done for interfaces
-    // that are deprecated, obsolete, or abstract.
-    predefinedTagNames = {
-        HTMLAnchorElement: ['a'],
-        HTMLDListElement: ['dl'],
-        HTMLDirectoryElement: ['dir'],
-        HTMLHeadingElement: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
-        HTMLKeygenElement: [], // deprecated
-        HTMLModElement: ['del', 'ins'],
-        HTMLOListElement: ['ol'],
-        HTMLParagraphElement: ['p'],
-        HTMLQuoteElement: ['blockquote'],
-        HTMLTableCaptionElement: ['caption'],
-        HTMLTableCellElement: ['td', 'th'],
-        HTMLTableColElement: ['col'],
-        HTMLTableRowElement: ['tr'],
-        HTMLTableSectionElement: ['tbody', 'tfoot', 'thead'],
-        HTMLUListElement: ['ul'],
-        HTMLUnknownElement: [] // abstract
-    },
-    props = getOwnPropertyNames(window),
-    prototypes = [],
+    nameOf = common.nameOf,
+    priv = new PrivatePropertyStore('ElementInterface'),
+    reg_capital = /^[A-Z]/,
     reg_htmlInterface = /^HTML(.+)Element$/,
-    toLower = (function () {
-        var S = String,
-            t = S.prototype.toLowerCase;
-        return function toLower(string) {
-            return t.call(S(string));
-        };
-    })(),
+    String = window.String,
+    
+    HTMLElementInterface = createInterface(HTMLElementProto, HTMLElement, 'HTMLElement'),
+    HTMLUnknownElementInterface = createInterface(HTMLUnknownElement.prototype, HTMLUnknownElement, 'HTMLUnknownElement'),
 
-    i = 0,
-    l = props.length,
-    n = 1,
-    name, match, interf, tagNames, isPredefined, element, t, tagName;
+    I = 0,
+    props, ctor, interf, name, proto, tagName, x, y;
 
 /**
- * @param {string} interfaceName
- * @returns {?function}
+ * @param {ElementInterface} interf
+ * @param {string} tagName
  */
-function constructorFromInterfaceName(interfaceName) {
-    return constructorsByInterfaceName[interfaceName] || null;
+function addTagName(interf, tagName) {
+    interfacesByTagName[tagName] = interf;
+    interf.tagNames[interf.tagNames.length] = tagName;
 }
 
 /**
  * @param {object} prototype
- * @returns {?function}
+ * @param {function} [constructor]
+ * @param {string} [name]
+ * @returns {?ElementInterface}
  */
-function constructorFromPrototype(prototype) {
-    var i = prototypes.length;
-    while (i--) {
-        if (prototype === prototypes[i]) {
-            return interfaces[i];
+function createInterface(prototype, constructor, name) {
+    var interf;
+    constructor = constructor || prototype.constructor;
+    if (!name) {
+        name = nameOf(prototype);
+        if (!reg_capital.test(name) || name === 'Object') {
+            name = null;
         }
     }
-    return null;
+    interf = {
+        constructor: constructor,
+        name: name,
+        prototype: prototype,
+        tagNames: []
+    };
+    interfaces[I++] = interf;
+    priv.set(constructor, interf);
+    priv.set(prototype, interf);
+    if (name) {
+        interfacesByName[name] = interf;
+    }
+    return interf;
+}
+
+/**
+ * @param {object} prototype
+ * @param {function} [constructor]
+ * @param {string} [name]
+ * @returns {?ElementInterface}
+ */
+function getOrCreateInterface(prototype, constructor, name) {
+    var interf = priv.get(prototype);
+    if (interf) {
+        if (constructor) {
+            priv.set(constructor, interf);
+        }
+        return interf;
+    }
+    if (!isPrototypeOf(HTMLElementProto, prototype)) {
+        if (name) {
+            interfacesByName[name] = null;
+        }
+        return null;
+    }
+    return createInterface(prototype, constructor, name);
 }
 
 /**
  * @param {string} tagName
- * @returns {?function}
+ * @param {string} [name]
+ * @returns {?ElementInterface}
  */
-function constructorFromTagName(tagName) {
-    return constructorsByTagName[tagName] || null;
-}
-
-/**
- * @param {function} constructor
- * @returns {boolean}
- */
-function isElementInterface(constructor) {
-    var i = interfaces.length;
-    while (i--) {
-        if (constructor === interfaces[i]) {
-            return true;
-        }
+function getOrCreateInterfaceFromTagName(tagName, name) {
+    var proto, interf;
+    if (hasOwnProperty(interfacesByTagName, tagName)) {
+        return interfacesByTagName[tagName];
     }
-    return false;
-}
-
-/**
- * @param {object} proto
- * @returns {boolean}
- */
-function isElementPrototype(proto) {
-    var i = prototypes.length;
-    while (i--) {
-        if (proto === prototypes[i]) {
-            return true;
-        }
+    try {
+        proto = getPrototypeOf(createElement(tagName));
+    } catch (ex) {
+        interfacesByTagName[tagName] = null;
+        return null;
     }
-    return false;
+    interf = getOrCreateInterface(proto, proto.constructor, name);
+    return interf === HTMLUnknownElementInterface ? null : interf;
 }
 
-/**
- * @param {string} tagName
- * @returns {boolean}
- */
-function isKnownTagName(tagName) {
-    return hasOwnProperty(constructorsByTagName, tagName);
-}
-
-interfaces[0] = HTMLElement;
-prototypes[0] = HTMLElementProto;
-
-while (i < l) {
-    name = props[i++];
-    match = reg_htmlInterface.exec(name);
-    interf = match == null ? null : window[name];
-    if (interf && interf.prototype && isPrototypeOf(HTMLElementProto, interf.prototype)) {
-        constructorsByInterfaceName[name] = interf;
-        interfaces[n++] = interf;
-        prototypes[n] = interf.prototype;
-        isPredefined = hasOwnProperty(predefinedTagNames, name);
-        if (isPredefined) {
-            tagNames = predefinedTagNames[name];
-        } else {
-            tagNames = [toLower(match[1])];
-        }
-        t = tagNames.length;
-        if (isPredefined) {
-            while (t--) {
-                constructorsByTagName[tagNames[t]] = interf;
-            }
-        } else {
-            while (t--) {
-                tagName = tagNames[t];
-                element = Document_createElement.call(document, tagName);
-                if (element instanceof interf) {
-                    constructorsByTagName[tagName] = interf;
-                }
-            }
+// Loop through all window properties that appear to be an HTML element interface.
+props = Object.getOwnPropertyNames(window);
+x = 0;
+y = props.length;
+while (x < y) {
+    name = props[x++];
+    if (reg_htmlInterface.test(name)) {
+        ctor = window[name];
+        if (ctor && !priv.has(ctor)) {
+            getOrCreateInterface(ctor.prototype, ctor, name);
         }
     }
 }
 
-allTagNames = getOwnPropertyNames(constructorsByTagName);
-interfaceNames = getOwnPropertyNames(constructorsByInterfaceName);
+// Add some other known interfaces by name.
+createInterface(Image.prototype, Image, 'Image');
+createInterface(Option.prototype, Option, 'Option');
+if (window.Audio) {
+    getOrCreateInterface(Audio.prototype, Audio, 'Audio');
+}
+
+// Loop through all predefined tag names and determine which ones are supported.
+x = 0;
+y = tagNames.length;
+while (x < y) {
+    tagName = tagNames[x++];
+    /*
+     * No need to use getOrCreateInterfaceFromTagName here because these tag names came
+     * from ../data/tag-names.js. They're trusted to be valid HTML tag names, meaning
+     * we can do the same operations from getOrCreateInterfaceFromTagName() but faster
+     * (since we're not using a try / catch block).
+     */
+    proto = getPrototypeOf(createElement(tagName));
+    interf = getOrCreateInterface(proto, proto.constructor, name);
+    if (interf === HTMLUnknownElementInterface) {
+        interf = null;
+    }
+    if (interf) {
+        addTagName(interf, tagName);
+    } else {
+        interfacesByTagName[tagName] = null;
+    }
+}
 
 module.exports = {
-    constructorFromInterfaceName: constructorFromInterfaceName,
-    constructorFromPrototype: constructorFromPrototype,
-    constructorFromTagName: constructorFromTagName,
-    interfaceNames: interfaceNames,
-    isElementInterface: isElementInterface,
-    isElementPrototype: isElementPrototype,
-    isKnownTagName: isKnownTagName,
-    tagNames: allTagNames
+    /**
+     * Returns the constructor for the built-in HTML element type associated with the given interface name (i.e. "HTMLDivElement"), or null if the current browser does not recognize the interface name.
+     * 
+     * @param {string} interfaceName - The interface name (i.e. "HTMLDivElement") whose constructor should be returned.
+     * 
+     * @returns {?function} - The constructor for the built-in HTML element type associated with the given interface name, or null if the current browser does not recognize the interface name.
+     */
+    constructorFromInterfaceName: function constructorFromInterfaceName(interfaceName) {
+        var n = interfacesByName[interfaceName];
+        return (n && n.constructor) || null;
+    },
+    /**
+     * Returns the constructor for the built-in HTML element type associated with the given prototype interface object, or null if the current browser does not recognize the prototype interface object.
+     * 
+     * @param {object} prototype - The prototype interface object whose constructor should be returned.
+     * 
+     * @returns {?function} - The constructor for the built-in HTML element type associated with the given prototype interface object, or null if the current browser does not recognize the prototype interface object.
+     */
+    constructorFromPrototype: function constructorFromPrototype(prototype) {
+        var n = priv.get(prototype);
+        return (n && n.constructor) || null;
+    },
+    /**
+     * Returns the constructor for the built-in HTML element type associated with the given tag name (i.e. "div"), or null if the current browser does not recognize the tag name.
+     * 
+     * @param {string} tagName - The tag name (i.e. "div") whose constructor should be returned.
+     * 
+     * @returns {?function} - The constructor for the built-in HTML element type associated with the given tag name, or null if the current browser does not recognize the tag name.
+     */
+    constructorFromTagName: function constructorFromTagName(tagName) {
+        var n = getOrCreateInterfaceFromTagName(tagName);
+        return (n && n.constructor) || null;
+    },
+    /**
+     * An array containing all of the element interfaces that have been detected.
+     * 
+     * @type {Array.<ElementInterface>}
+     */
+    interfaces: interfaces,
+    /**
+     * Determines whether the given object is the constructor function of a built-in HTML element type that is recognized by the current browser.
+     * 
+     * @param {function} constructor - The object to test.
+     * 
+     * @returns {boolean} - True if the given object is the constructor function of a built-in HTML element type that is recognized by the current browser; otherwise, false.
+     */
+    isElementInterface: function isElementInterface(constructor) {
+        return priv.has(constructor);
+    },
+    /**
+     * Determines whether the given object is the interface prototype object of a built-in HTML element type that is recognized by the current browser.
+     * 
+     * @param {object} prototype - The object to test.
+     * 
+     * @returns {boolean} - True if the given object is the interface prototype object of a built-in HTML element type that is recognized by the current browser; otherwise, false.
+     */
+    isElementPrototype: function isElementPrototype(prototype) {
+        return priv.has(prototype);
+    },
+    /**
+     * Determines whether the given tag name corresponds to a built-in HTML element that is recognized by the current browser.
+     * 
+     * @param {string} tagName - The tag name of the element to test.
+     * 
+     * @returns {boolean} - True if the tag name corresponds to a built-in HTML element that is recognized by the current browser; otherwise, false.
+     */
+    isKnownTagName: function isKnownTagName(tagName) {
+        return !isValidCustomElementName(tagName) && !!getOrCreateInterfaceFromTagName(tagName);
+    }
 };
 
-},{"./common":5}],4:[function(require,module,exports){
+},{"../data/tag-names":2,"./common":6,"./is-valid-custom-element-name":12,"./private-property-store":16}],5:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
@@ -532,7 +613,7 @@ var common = require('./common'),
  */
 function ClassProxy(constructor, finalConstructor) {
 
-    var prototype = (finalConstructor || constructor).prototype,
+    var prototype = constructor.prototype,
         baseConstructor, basePrototype, initializer, source;
 
     this.originalConstructor = constructor;
@@ -544,9 +625,10 @@ function ClassProxy(constructor, finalConstructor) {
     if (finalConstructor) {
         this.finalConstructor = finalConstructor;
         if (constructor !== finalConstructor) {
-            this.isElementInterface = true;
-            this.finalConstructor.prototype = prototype;
             this.isClass = false;
+            this.isElementInterface = true;
+            finalConstructor.prototype = prototype;
+            prototype.constructor = finalConstructor;
             proxies.set(finalConstructor, this);
         } else {
             this.isClass = supportsClasses;
@@ -711,7 +793,7 @@ module.exports = {
     proxy: proxy
 };
 
-},{"./common":5,"./private-property-store":15}],5:[function(require,module,exports){
+},{"./common":6,"./private-property-store":16}],6:[function(require,module,exports){
 'use strict';
 
 require('./private-property-store');
@@ -728,7 +810,6 @@ var concat,
     abs = Math.abs,
     document = window.document,
     Document_get_readyState = getOwnPropertyDescriptor(window.Document.prototype, 'readyState').get,
-    exp,
     floor = Math.floor,
     globalEval = window.eval,
     isFinite = window.isFinite,
@@ -744,8 +825,11 @@ var concat,
      */
     nextElementIsSynchronous = false,
     Number = window.Number,
+    reg_obj = /^\[object (.*)\]$/,
+    reg_prototypeSuffix = /Prototype$/,
     setTimeout = window.setTimeout,
     shimStack = 0,
+    str = String,
     supportsClasses = (function () {
         try {
             globalEval('(function(){return class A{};})()');
@@ -753,7 +837,8 @@ var concat,
         } catch (ex) {
             return false;
         }
-    })();
+    })(),
+    toStr = Function.prototype.call.bind(Object.prototype.toString);
 
 if (!getOwnPropertyDescriptors) {
     concat = Array.prototype.concat;
@@ -854,6 +939,23 @@ function isPrototypeOf(proto, O) {
 }
 
 /**
+ * @param {*} obj
+ * @returns {string}
+ */
+function nameOf(obj) {
+    var t, m;
+    if (obj == null) {
+        return str(obj);
+    }
+    t = typeof obj;
+    if (t !== 'object') {
+        return t;
+    }
+    m = reg_obj.exec(toStr(obj));
+    return m ? m[1].replace(reg_prototypeSuffix, '') : t;
+}
+
+/**
  * @private
  * @param {object} value
  * @returns {number}
@@ -870,7 +972,7 @@ function toLength(value) {
     return min(max(len, 0), maxSafeInteger);
 }
 
-exp = {
+module.exports = {
     arrayContains: arrayContains,
     callbackNames: {
         adopted: 'adoptedCallback',
@@ -899,6 +1001,7 @@ exp = {
     },
     isDocumentReady: isDocumentReady,
     isPrototypeOf: isPrototypeOf,
+    nameOf: nameOf,
     states: {
         /**
          * Indicates an autonomous custom element or customized built-in element
@@ -923,13 +1026,10 @@ exp = {
          */
         undefined: 'undefined'
     },
-    supportsClasses: supportsClasses,
-    throwAsync: function throwAsync(error) {
-        setTimeout(function (er) { throw er; }, 0, error);
-    }
+    supportsClasses: supportsClasses
 };
 
-module.exports = defineProperties(exp, {
+defineProperties(module.exports, {
     mainDocumentReady: {
         get: function () {
             return mainDocumentReady;
@@ -953,7 +1053,7 @@ module.exports = defineProperties(exp, {
     }
 });
 
-},{"./private-property-store":15}],6:[function(require,module,exports){
+},{"./private-property-store":16}],7:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
@@ -962,23 +1062,52 @@ var common = require('./common'),
     getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
     hasOwnProperty = common.hasOwnProperty,
 
+    AttrProto = window.Attr.prototype,
     ElementProto = window.Element.prototype,
     HTMLElement = window.HTMLElement,
     NodeProto = window.Node.prototype,
 
-    Element_removeAttributeNode = ElementProto.removeAttributeNode,
-    Element_setAttributeNodeNS = ElementProto.setAttributeNodeNS,
+    Attr_get_name = getOwnPropertyDescriptor(AttrProto, 'name').get,
+    Attr_get_namespaceURI = getOwnPropertyDescriptor(hasOwnProperty(AttrProto, 'namespaceURI') ? AttrProto : NodeProto, 'namespaceURI').get,
+    Attr_get_value = getOwnPropertyDescriptor(AttrProto, 'value').get,
+
+    Element_removeAttributeNS = ElementProto.removeAttributeNS,
+    Element_setAttributeNS = ElementProto.setAttributeNS,
     Element_get_attributes = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'attributes') ? ElementProto : NodeProto, 'attributes').get,
+    Element_get_localName = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'localName') ? ElementProto : NodeProto, 'localName').get,
+    Element_get_namespaceURI = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'namespaceURI') ? ElementProto : NodeProto, 'namespaceURI').get,
 
     Node_appendChild = NodeProto.appendChild,
     Node_removeChild = NodeProto.removeChild,
     Node_get_firstChild = getOwnPropertyDescriptor(NodeProto, 'firstChild').get,
+    Node_get_ownerDocument = getOwnPropertyDescriptor(NodeProto, 'ownerDocument').get,
     
     conformanceStatus = common.conformanceStatus,
     DOMException = window.DOMException,
     failedToConstruct = "Failed to construct 'CustomElement': ",
+    HTML_NAMESPACE = common.htmlNamespace,
     states = common.states,
     TypeError = window.TypeError;
+
+/**
+ * @param {HTMLElement} element
+ * @param {Attr} attr
+ * @returns {Attr}
+ */
+function removeAttribute(element, attr) {
+    Element_removeAttributeNS.call(element, Attr_get_namespaceURI.call(attr), Attr_get_name.call(attr));
+    return attr;
+}
+
+/**
+ * @param {HTMLElement} element
+ * @param {Attr} attr
+ * @returns {Attr}
+ */
+function restoreAttribute(element, attr) {
+    Element_setAttributeNS.call(element, Attr_get_namespaceURI.call(attr), Attr_get_name.call(attr), Attr_get_value.call(attr));
+    return attr;
+}
 
 /**
  * @param {CustomElementProperties} props
@@ -1000,7 +1129,7 @@ function beginConformanceCheck(props) {
 
     i = 0;
     while (attr = attrs[0]) {
-        originalAttributes[i++] = Element_removeAttributeNode.call(element, attr);
+        originalAttributes[i++] = removeAttribute(element, attr);
     }
     i = 0;
     while (child = Node_get_firstChild.call(element)) {
@@ -1025,14 +1154,14 @@ function disposeConformanceProperties(props) {
             // Remove any attributes that were non-conformantly added during the constructor
             attrs = Element_get_attributes.call(element);
             while (attr = attrs[0]) {
-                Element_removeAttributeNode.call(element, attr);
+                removeAttribute(element, attr);
             }
             // Restore the original attributes
             attrs = props.originalAttributes;
             i = 0;
             l = attrs.length;
             while (i < l) {
-                Element_setAttributeNodeNS.call(element, attrs[i++]);
+                restoreAttribute(element, attrs[i++]);
             }
         }
 
@@ -1078,14 +1207,6 @@ function evaluateConformance(props) {
     // The remainder of this method executes steps 6.1.3 through 6.1.9 of the DOM Standard
     // "create an element" algorithm.
     // https://dom.spec.whatwg.org/#concept-create-element
-    // 
-    // Step 6.1.8 is intentionally skipped:
-    // 
-    //   6.1.8.  If `result`'s namespace is not the HTML namespace, then throw a NotSupportedError.
-    // 
-    // This check may someday be necessary in native browser implementations if the spec
-    // changes, but on the polyfill side, we know that every element implementing the
-    // HTMLElement interface belongs to the HTML namespace.
 
     if (!(element instanceof HTMLElement)) {
         //  6.1.3.  If `result` does not implement the HTMLElement interface, then throw a TypeError.
@@ -1102,9 +1223,12 @@ function evaluateConformance(props) {
     } else if (Node_get_ownerDocument.call(element) !== props.originalDocument) {
         //  6.1.7.  If `result`'s node document is not `document`, then throw a NotSupportedError.
         error = new DOMException(failedToConstruct + 'The resulting element must belong to the same document for which it was created.', 'NotSupportedError');
+    } else if (Element_get_namespaceURI.call(element) !== HTML_NAMESPACE) {
+        //  6.1.8.  If `result`'s namespace is not the HTML namespace, then throw a NotSupportedError.
+        error = new DOMException(failedToConstruct + 'The resulting element\'s namespace must be the HTML namespace.', 'NotSupportedError');
     } else if (Element_get_localName.call(element) !== definition.localName) {
         //  6.1.9.  If `result`'s local name is not equal to `localName`, then throw a NotSupportedError.
-        error = new DOMException(failedToConstruct + "The resulting element's local name must match the local name specified by its custom element definition ('" + definition.localName + "').", 'NotSupportedError');
+        error = new DOMException(failedToConstruct + 'The resulting element\'s local name must match the local name specified by its custom element definition (\'' + definition.localName + '\').', 'NotSupportedError');
     }
 
     if (error) {
@@ -1166,7 +1290,7 @@ module.exports = {
     }
 };
 
-},{"./common":5,"./custom-element-properties":9}],7:[function(require,module,exports){
+},{"./common":6,"./custom-element-properties":10}],8:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
@@ -1175,12 +1299,14 @@ var common = require('./common'),
     isValidCustomElementName = require('./is-valid-custom-element-name'),
     nativeCustomElements = require('./native-custom-elements'),
     reactions = require('./reactions'),
+    reportError = require('./report-error'),
 
     arrayFrom = Array.from,
     Element_setAttributeNS = window.Element.prototype.setAttributeNS,
     HTML_NAMESPACE = common.htmlNamespace,
-    setPrototypeOf = Object.setPrototypeOf,
-    throwAsync = common.throwAsync;
+    HTMLUnknownElement = window.HTMLUnknownElement,
+    HTMLUnknownElementProto = HTMLUnknownElement.prototype,
+    setPrototypeOf = Object.setPrototypeOf;
 
 /**
  * @param {Document} document
@@ -1251,7 +1377,7 @@ module.exports = function createElement(document, localName, namespace, prefix, 
             try {
                 reactions.upgradeElement(props, true);
             } catch (ex) {
-                throwAsync(ex);
+                reportError(ex);
             }
         } else {
             //  5.4.    Otherwise, enqueue a custom element upgrade reaction given `result` and `definition`.
@@ -1276,11 +1402,10 @@ module.exports = function createElement(document, localName, namespace, prefix, 
                 //  6.1.10. Set `result`'s namespace prefix to prefix.
                 //  6.1.11. Set `result`'s is value to null.
             } catch (ex) {
-                common.nextElementIsSynchronous = false;
 
                 //  6.1.    (continued) If any of these subsubsteps threw an exception, then:
                 //  6.1.1E. Report the exception.
-                throwAsync(ex);
+                reportError(ex);
 
                 //  6.1.2E. Set `result` to a new element that implements the HTMLUnknownElement interface, with no
                 //          attributes, namespace set to the HTML namespace, namespace prefix set to `prefix`, local
@@ -1288,7 +1413,7 @@ module.exports = function createElement(document, localName, namespace, prefix, 
                 //          set to null, is value set to null, and node document set to `document`.
                 result = definition.createElement(document);
                 props = new CustomElementProperties(result, definition);
-                props.state = STATES.FAILED;
+                props.state = common.states.failed;
                 if (!(result instanceof HTMLUnknownElement)) {
                     setPrototypeOf(result, HTMLUnknownElementProto);
                 }
@@ -1328,7 +1453,7 @@ module.exports = function createElement(document, localName, namespace, prefix, 
     return result;
 };
 
-},{"./common":5,"./custom-element-definition":8,"./custom-element-properties":9,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./reactions":16}],8:[function(require,module,exports){
+},{"./common":6,"./custom-element-definition":9,"./custom-element-properties":10,"./is-valid-custom-element-name":12,"./native-custom-elements":13,"./reactions":17,"./report-error":18}],9:[function(require,module,exports){
 'use strict';
 
 /**
@@ -1354,6 +1479,7 @@ var builtInElements = require('./built-in-elements'),
 
     ADOPTED_CALLBACK = common.callbackNames.adopted,
     Array = window.Array,
+    conformanceStatus = common.conformanceStatus,
     document = window.document,
     Document = window.Document,
     Element = window.Element,
@@ -1361,7 +1487,9 @@ var builtInElements = require('./built-in-elements'),
     getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor,
     hasOwnProperty = common.hasOwnProperty,
     HTMLElement = window.HTMLElement,
+    HTMLElementProto = HTMLElement.prototype,
     HTML_NAMESPACE = common.htmlNamespace,
+    isPrototypeOf = common.isPrototypeOf,
     NodeProto = window.Node.prototype,
     states = common.states,
 
@@ -1369,6 +1497,7 @@ var builtInElements = require('./built-in-elements'),
     Element_getAttributeNS = ElementProto.getAttributeNS,
     Element_get_localName = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'localName') ? ElementProto : NodeProto, 'localName').get,
     Element_get_namespaceURI = getOwnPropertyDescriptor(hasOwnProperty(ElementProto, 'namespaceURI') ? ElementProto : NodeProto, 'namespaceURI').get,
+    Element_setAttributeNS = ElementProto.setAttributeNS,
 
     /**
      * A map that associates a custom element constructor with its corresponding
@@ -1461,6 +1590,10 @@ CustomElementDefinition.prototype.constructElement = function constructElement(s
     } catch (ex) {
         hasError = true;
         error = ex;
+    } finally {
+        if (synchronous) {
+            common.nextElementIsSynchronous = false;
+        }
     }
     props = CustomElementProperties.get(element);
     if (props) {
@@ -1475,6 +1608,10 @@ CustomElementDefinition.prototype.constructElement = function constructElement(s
         if (hasError) {
             props.reactionQueue.length = 0;
         }
+    }
+    if (!hasError && synchronous && !isPrototypeOf(HTMLElementProto, element)) {
+        error = new TypeError('Failed to construct \'CustomElement\': The resulting element must implement the HTMLElement interface.');
+        hasError = true;
     }
     if (hasError) {
         throw error;
@@ -1627,7 +1764,7 @@ CustomElementDefinition.lookup = function (doc, namespace, localName, is) {
 
 module.exports = CustomElementDefinition;
 
-},{"./built-in-elements":3,"./common":5,"./conformance":6,"./custom-element-properties":9}],9:[function(require,module,exports){
+},{"./built-in-elements":4,"./common":6,"./conformance":7,"./custom-element-properties":10}],10:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
@@ -1724,27 +1861,36 @@ CustomElementProperties.get = function get(element) {
 
 module.exports = CustomElementProperties;
 
-},{"./common":5,"./private-property-store":15}],10:[function(require,module,exports){
+},{"./common":6,"./private-property-store":16}],11:[function(require,module,exports){
 'use strict';
 
-var builtInElements = require('./built-in-elements'),
+var baseElementConstructor = require('./base-element-constructor'),
+    builtInElements = require('./built-in-elements'),
     classes = require('./classes'),
     common = require('./common'),
     CustomElementDefinition = require('./custom-element-definition'),
+    CustomElementProperties = require('./custom-element-properties'),
     isValidCustomElementName = require('./is-valid-custom-element-name'),
     nativeCustomElements = require('./native-custom-elements'),
     reactions = require('./reactions'),
 
     Array = window.Array,
+    HTMLElement = window.HTMLElement,
     ObjectProto = window.Object.prototype,
 
     arrayFrom = Array.from,
+    builtInHTMLElementConstructor = function() {
+        return baseElementConstructor.call(this, HTMLElement);
+    },
     callbackNames = common.callbackNames.all,
+    CustomElementRegistry,
     document = window.document,
     Document_getElementsByTagName = window.Document.prototype.getElementsByTagName,
     DOMException = window.DOMException,
     Element_getAttributeNS = window.Element.prototype.getAttributeNS,
+    getPrototypeOf = Object.getPrototypeOf,
     hasOwnProperty = common.hasOwnProperty,
+    instance,
     isArray = Array.isArray,
     isPrototypeOf = common.isPrototypeOf,
     isRunning = false,
@@ -1766,8 +1912,7 @@ var builtInElements = require('./built-in-elements'),
      * @type {object}
      */
     promises = {},
-    CustomElementRegistry,
-    instance,
+    setPrototypeOf = Object.setPrototypeOf,
     String = window.String,
     TypeError = window.TypeError;
 
@@ -1870,7 +2015,7 @@ CustomElementRegistry.prototype.define = function define(name, constructor, opti
 
     var validateArguments, extend, localName, prototype, callbacks, callbackName,
         observedAttributes, attributes, definition, upgradeCandidates, i, l, args,
-        candidates, c;
+        candidates, c, props;
 
     if (this !== instance) {
         throw new TypeError(methodError('define', common.illegalInvocation));
@@ -1914,7 +2059,8 @@ CustomElementRegistry.prototype.define = function define(name, constructor, opti
     if (CustomElementDefinition.fromName(name) || (nativeCustomElements && nativeCustomElements.get(name))) {
         // If a native customElements implementation exists and the current definition
         // is for an autonomous custom element, then the check for an existing definition
-        // via Definition.fromName() has already been made, and we don't need to repeat it.
+        // via CustomElementDefinition.fromName() has already been made, and we don't need
+        // to repeat it.
         throw new DOMException(nameInUseError(name), 'NotSupportedError');
     }
 
@@ -2065,13 +2211,17 @@ CustomElementRegistry.prototype.define = function define(name, constructor, opti
         //      that exception, and terminate this algorithm. Otherwise, continue onward.
     }
 
+    if (common.supportsClasses && nativeCustomElements && extend && classes.isClass(constructor) && getPrototypeOf(constructor) === HTMLElement) {
+        setPrototypeOf(constructor, builtInHTMLElementConstructor);
+    }
+
     // 11.  Let `definition` be a new custom element definition with name `name`, local
     //      name `localName`, constructor `constructor`, prototype `prototype`, observed
     //      attributes `observedAttributes`, and lifecycle callbacks `lifecycleCallbacks`.
     definition = new CustomElementDefinition(name, localName, constructor, prototype, observedAttributes, callbacks);
 
     // 12.  Add `definition` to this CustomElementRegistry.
-    // (Step 12 is completed within the Definition() constructor.)
+    // (Step 12 is completed within the CustomElementDefinition() constructor.)
 
     // 13.  Let `document` be this CustomElementRegistry's relevant global object's
     //      associated Document.
@@ -2100,7 +2250,9 @@ CustomElementRegistry.prototype.define = function define(name, constructor, opti
     i = 0;
     reactions.pushQueue();
     while (i < l) {
-        reactions.enqueueUpgradeReaction(upgradeCandidates[i++], definition);
+        c = upgradeCandidates[i++];
+        props = CustomElementProperties.get(c) || new CustomElementProperties(c, definition);
+        reactions.enqueueUpgradeReaction(props, definition);
     }
     reactions.popQueue();
 
@@ -2195,7 +2347,7 @@ CustomElementRegistry.prototype.whenDefined = function whenDefined(name) {
 
 module.exports = CustomElementRegistry;
 
-},{"./built-in-elements":3,"./classes":4,"./common":5,"./custom-element-definition":8,"./is-valid-custom-element-name":11,"./native-custom-elements":12,"./reactions":16}],11:[function(require,module,exports){
+},{"./base-element-constructor":3,"./built-in-elements":4,"./classes":5,"./common":6,"./custom-element-definition":9,"./custom-element-properties":10,"./is-valid-custom-element-name":12,"./native-custom-elements":13,"./reactions":17}],12:[function(require,module,exports){
 'use strict';
 
 var reg_reservedTagNames = /^(?:annotation-xml|color-profile|font-face(?:-(?:src|uri|format|name))?|missing-glyph)$/,
@@ -2230,7 +2382,7 @@ function isValidCustomElementName(tagName) {
 
 module.exports = isValidCustomElementName;
 
-},{}],12:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
@@ -2269,7 +2421,7 @@ if (common.supportsClasses && typeof window.CustomElementRegistry === 'function'
     module.exports = false;
 }
 
-},{"./common":5}],13:[function(require,module,exports){
+},{"./common":6}],14:[function(require,module,exports){
 module.exports = (function () {
     var toStr, isCallable, toInteger, maxSafeInteger, toLength, from;
     if (typeof Array.from === 'function') {
@@ -2359,7 +2511,7 @@ module.exports = (function () {
     return from;
 }());
 
-},{}],14:[function(require,module,exports){
+},{}],15:[function(require,module,exports){
 (function (global){
 (function (window) {
     'use strict';
@@ -2600,7 +2752,7 @@ module.exports = (function () {
 })(typeof global !== 'undefined' ? global : (typeof self !== 'undefined' ? self : (typeof window !== 'undefined' ? window : {})));
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],15:[function(require,module,exports){
+},{}],16:[function(require,module,exports){
 'use strict';
 
 var concat = Array.prototype.concat,
@@ -2663,15 +2815,21 @@ if (Symbol) {
             s = symbols.length,
             result = [],
             r = 0,
-            j, key, symbol;
-        while (p--) {
-            key = privateSymbols[p];
-            j = 0;
-            while (j < s) {
-                symbol = symbols[j++];
-                if (symbol !== key) {
-                    result[r++] = symbol;
+            i = 0,
+            j = 0,
+            key, symbol;
+        while (i < s) {
+            symbol = symbols[i++];
+            j = p;
+            while (j--) {
+                key = privateSymbols[j];
+                if (symbol === key) {
+                    symbol = null;
+                    break;
                 }
+            }
+            if (symbol) {
+                result[r++] = symbol;
             }
         }
         return result;
@@ -2849,13 +3007,14 @@ function PrivatePropertyStore(name) {
 
 module.exports = PrivatePropertyStore;
 
-},{}],16:[function(require,module,exports){
+},{}],17:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
     CustomElementDefinition = require('./custom-element-definition'),
     CustomElementProperties = require('./custom-element-properties'),
     PrivatePropertyStore = require('./private-property-store'),
+    reportError = require('./report-error'),
 
     ADOPTED_CALLBACK = common.callbackNames.adopted,
     ATTRIBUTE_CALLBACK = common.callbackNames.attributeChanged,
@@ -2896,7 +3055,6 @@ var common = require('./common'),
     isDocumentReady = common.isDocumentReady,
     setTimeout = window.setTimeout,
     states = common.states,
-    throwAsync = common.throwAsync,
 
     /**
      * Indicates whether the backup element queue is currently being processed.
@@ -3058,7 +3216,7 @@ ElementQueue.prototype.invoke = function () {
             try {
                 reaction.apply(props);
             } catch (ex) {
-                throwAsync(ex);
+                reportError(ex);
             }
         }
     }
@@ -3269,7 +3427,7 @@ function enqueueUpgradeReaction(props) {
     }
 
     props.upgradeEnqueued = true;
-    definition = props.definition || Definition.fromElement(props.element);
+    definition = props.definition || CustomElementDefinition.fromElement(props.element);
 
     if (!enqueueingFromMutationObserver && elementQueues.length > 0) {
         enqueuePendingMutationRecords();
@@ -3321,7 +3479,7 @@ function enqueueAddedNode(node, connected, upgraded) {
                 try {
                     upgradeElement(props, true);
                 } catch (ex) {
-                    throwAsync(ex);
+                    reportError(ex);
                 }
                 popQueue();
                 if (docProps) {
@@ -3568,13 +3726,11 @@ function upgradeElement(props, synchronous) {
 
     // 6.   Let `C` be `definition`'s constructor.
     // 7.   Let `constructResult` be Construct(`C`).
-    common.nextElementIsSynchronous = true;
     try {
-        constructResult = definition.constructElement();
+        constructResult = definition.constructElement(!!synchronous);
     } catch (ex) {
         constructError = ex;
     }
-    common.nextElementIsSynchronous = false;
 
     // 8.   Remove the last entry from the end of `definition`'s construction stack.
     definition.constructionStack.pop();
@@ -3583,7 +3739,7 @@ function upgradeElement(props, synchronous) {
     if (constructError) {
 
         // 9.1.     Set `element`'s custom element state to "failed".
-        props.state = STATES.FAILED;
+        props.state = states.failed;
 
         // 9.2.     Return `constructResult` (i.e., rethrow the exception), and terminate
         //          these steps.
@@ -3698,41 +3854,184 @@ enabledDescriptor = {
     }
 };
 
-Object.defineProperty(common, 'reactionsEnabled', enabledDescriptor);
-
-module.exports = Object.defineProperties({}, {
-    enabled: enabledDescriptor,
-
-    enqueueCallbackReaction: {
-        value: enqueueCallbackReaction
-    },
-    enqueueUpgradeReaction: {
-        value: enqueueUpgradeReaction
-    },
-
-    observeDocument: {
-        value: observeDocument
-    },
-    observeElement: {
-        value: observeElement
-    },
-    popQueue: {
-        value: popQueue
-    },
-    pushQueue: {
-        value: pushQueue
-    },
-
+module.exports = {
+    enqueueCallbackReaction: enqueueCallbackReaction,
+    enqueueUpgradeReaction: enqueueUpgradeReaction,
+    observeDocument: observeDocument,
+    observeElement: observeElement,
+    popQueue: popQueue,
+    pushQueue: pushQueue,
     upgradeElement: upgradeElement
-});
+};
 
-},{"./common":5,"./custom-element-definition":8,"./custom-element-properties":9,"./private-property-store":15}],17:[function(require,module,exports){
+Object.defineProperty(common, 'reactionsEnabled', enabledDescriptor);
+Object.defineProperty(module.exports, 'enabled', enabledDescriptor);
+
+},{"./common":6,"./custom-element-definition":9,"./custom-element-properties":10,"./private-property-store":16,"./report-error":18}],18:[function(require,module,exports){
+'use strict';
+
+var consoleError = window.console && typeof window.console.error === 'function' ? window.console.error.bind(window.console) : function () {},
+    createEvent,
+    dispatch = window.dispatchEvent.bind(window),
+    ErrorEvent_get_colno,
+    ErrorEvent_get_error,
+    errorEventProps,
+    errorTest = (function () {
+        try {
+            throw new TypeError('test');
+        } catch (ex) {
+            return ex;
+        }
+    })(),
+    eventConstructors = (function () {
+        try {
+            new ErrorEvent('error');
+            return true;
+        } catch (e) {
+            return false;
+        }
+    })(),
+    Event_preventDefault,
+    Event_get_defaultPrevented = Object.getOwnPropertyDescriptor(Event.prototype, 'defaultPrevented').get,
+    Event_get_defaultPrevented_old,
+    hasStack = typeof errorTest.stack === 'string',
+    initErrorEvent,
+    int = parseInt,
+    reg_newline = /\r\n|\r|\n/,
+    reg_stack = /([^@\(\s]+):(\d+):(\d+)/,
+    stackIncludesDescription = hasStack ? /TypeError/.test(errorTest.stack) : false,
+    String_slice = String.prototype.slice;
+
+/**
+ * @param {Error} error
+ * @returns {ErrorEvent}
+ */
+function createErrorEvent(error) {
+    return new ErrorEvent('error', getErrorInfo(error));
+}
+
+/**
+ * @param {Error} error
+ * @returns {ErrorEventInit}
+ */
+function getErrorInfo(error) {
+    var stack = error.stack,
+        result = {
+            bubbles: false,
+            cancelable: true,
+            colno: 0,
+            error: error,
+            filename: '',
+            lineno: 0,
+            message: error.message
+        },
+        match;
+    if (!stack || typeof stack !== 'string') {
+        return result;
+    }
+    if (stackIncludesDescription) {
+        match = reg_newline.exec(stack);
+        if (match) {
+            stack = String_slice.call(error.stack, match.index + match[0].length);
+        }
+    }
+    match = reg_stack.exec(stack);
+    if (match) {
+        result.filename = match[1];
+        result.lineno = int(match[2], 10);
+        result.colno = int(match[3], 10);
+    }
+    return result;
+}
+
+if (!eventConstructors) {
+
+    createEvent = Document.prototype.createEvent.bind(document);
+    ErrorEvent_get_colno = Object.getOwnPropertyDescriptor(ErrorEvent.prototype, 'colno').get;
+    ErrorEvent_get_error = Object.getOwnPropertyDescriptor(ErrorEvent.prototype, 'error').get;
+    errorEventProps = require('./private-property-store')('error');
+    Event_get_defaultPrevented_old = Event_get_defaultPrevented;
+    Event_preventDefault = Event.prototype.preventDefault;
+    initErrorEvent = ErrorEvent.prototype.initErrorEvent;
+
+    Event_get_defaultPrevented = function () {
+        var props = errorEventProps.get(this);
+        return props ? props.defaultPrevented : Event_get_defaultPrevented_old.call(this);
+    };
+
+    Object.defineProperties(ErrorEvent.prototype, {
+        colno: {
+            configurable: true,
+            enumerable: true,
+            get: function () {
+                var props = errorEventProps.get(this);
+                return props ? props.colno : ErrorEvent_get_colno.call(this);
+            }
+        },
+        defaultPrevented: {
+            configurable: true,
+            enumerable: true,
+            get: Event_get_defaultPrevented
+        },
+        error: {
+            configurable: true,
+            enumerable: true,
+            get: function () {
+                var props = errorEventProps.get(this);
+                return props ? props.error : ErrorEvent_get_error.call(this);
+            }
+        },
+        preventDefault: {
+            configurable: true,
+            enumerable: true,
+            value: function preventDefault() {
+                var props = errorEventProps.get(this);
+                if (props) {
+                    props.defaultPrevented = true;
+                }
+                Event_preventDefault.call(this);
+            },
+            writable: true
+        }
+    });
+
+    /**
+     * @param {Error} error
+     * @returns {ErrorEvent}
+     */
+    createErrorEvent = function createErrorEvent(error) {
+        var event = createEvent('ErrorEvent'),
+            props = getErrorInfo(error);
+        props.defaultPrevented = false;
+        props.error = error;
+        initErrorEvent.call(event, 'error', props.bubbles, props.cancelable, props.message, props.filename, props.lineno);
+        errorEventProps.set(event, props);
+        return event;
+    };
+
+}
+
+/**
+ * Reports the provided error without throwing it.
+ * 
+ * @param {Error} error - The error being reported.
+ */
+module.exports = function reportError(error) {
+    var event = createErrorEvent(error);
+    dispatchEvent(event);
+    if (!Event_get_defaultPrevented.call(event)) {
+        consoleError('Uncaught ' + (!error.stack || !stackIncludesDescription ? error.name + ': ' : '') + (error.stack || error.message));
+    }
+};
+
+},{"./private-property-store":16}],19:[function(require,module,exports){
 'use strict';
 
 var common = require('./common'),
     createElementInternal = require('./create-element'),
     CustomElementDefinition = require('./custom-element-definition'),
     CustomElementProperties = require('./custom-element-properties'),
+    nativeCustomElements = require('./native-custom-elements'),
     reactions = require('./reactions'),
 
     DocumentProto = window.Document.prototype,
@@ -4099,7 +4398,11 @@ shim(DocumentProto,
                 is = String(options instanceof Object && options.is !== undefined ? options.is : options);
             }
             beginReactionShim();
-            element = createElementInternal(this, localName, HTML_NAMESPACE, null, is, true, null, Document_createElement, this, arguments);
+            // Only send 'tagName' in the argument list to the fallback document.createElement
+            // invocation (last parameter below). Some implementations throw a "NotFoundError"
+            // DOMException if they support autonomous custom elements and an unknown "is" option
+            // is provided.
+            element = createElementInternal(this, localName, HTML_NAMESPACE, null, is, true, null, Document_createElement, this, [tagName]);
             endReactionShim();
             return element;
         },
@@ -4122,7 +4425,11 @@ shim(DocumentProto,
                 is = String(options instanceof Object && options.is !== undefined ? options.is : options);
             }
             beginReactionShim();
-            element = createElementInternal(this, localName, namespaceURI, prefix, is, true, null, Document_createElementNS, this, arguments);
+            // Only send 'tagName' in the argument list to the fallback document.createElement
+            // invocation (last parameter below). Some implementations throw a "NotFoundError"
+            // DOMException if they support autonomous custom elements and an unknown "is" option
+            // is provided.
+            element = createElementInternal(this, localName, namespaceURI, prefix, is, true, null, Document_createElementNS, this, [tagName]);
             endReactionShim();
             return element;
         },
@@ -4384,4 +4691,4 @@ module.exports = {
     shim: shim
 };
 
-},{"./common":5,"./create-element":7,"./custom-element-definition":8,"./custom-element-properties":9,"./reactions":16}]},{},[1]);
+},{"./common":6,"./create-element":8,"./custom-element-definition":9,"./custom-element-properties":10,"./native-custom-elements":13,"./reactions":17}]},{},[1]);

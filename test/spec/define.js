@@ -3,7 +3,7 @@
 require('mocha');
 
 var expect = require('expect.js'),
-    util = require('../util'),
+    util = require('../common/util'),
 
     defineElement = util.defineElement,
     invalidTagNames = util.invalidTagNames,
@@ -72,9 +72,11 @@ describe('CustomElementRegistry.prototype.define()', function () {
         specify('when constructor.prototype.attributeChangedCallback is defined, and the constructor has a property named "observedAttributes" that is not undefined and cannot be converted to an array of strings', function () {
             shouldThrow(TypeError, function () {
                 var f = function () { };
+                f.prototype = Object.create(HTMLAnchorElement.prototype);
+                f.prototype.constructor = f;
                 f.prototype.attributeChangedCallback = function () { };
                 f.observedAttributes = null;
-                customElements.define(uniqueCustomElementName(), f);
+                customElements.define(uniqueCustomElementName(), f, { 'extends': 'a' });
             });
         });
     });

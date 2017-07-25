@@ -5,6 +5,7 @@
     require('./lib/other-polyfills/DOMException');
 
     var common = require('./lib/common'),
+
         baseElementConstructor,
         builtInElements,
         classes,
@@ -118,31 +119,34 @@
 
     (function () {
 
-        /**
+        /*
          * The routine below patches the native HTML element interfaces (HTMLAnchorElement,
          * HTMLDivElement, etc) so they can serve as bases for user-defined classes in
          * cooperation with the ES6 class proxying mechanism defined in the 'classes' module.
          */
 
-        var names = builtInElements.interfaceNames,
+        var interfaces = builtInElements.interfaces,
             i = 0,
-            l = names.length,
+            l = interfaces.length,
             HTMLElement = window.HTMLElement,
-            name, interf, finalConstructor;
+            name, interf, ctor, finalConstructor;
 
         window.HTMLElement = classes.proxy(HTMLElement, (nativeCustomElements ? window.HTMLElement : function () {
             return baseElementConstructor.call(this, HTMLElement);
         }));
 
         while (i < l) {
-            name = names[i++];
-            interf = builtInElements.constructorFromInterfaceName(name);
-            finalConstructor = nativeCustomElements && nativeCustomElements.canExtend ? interf : (function (a) {
-                return function () {
-                    return baseElementConstructor.call(this, a);
-                };
-            })(interf);
-            window[name] = classes.proxy(interf, finalConstructor);
+            interf = interfaces[i++];
+            name = interf.name;
+            if (name) {
+                ctor = interf.constructor;
+                finalConstructor = nativeCustomElements && nativeCustomElements.canExtend ? ctor : (function (a) {
+                    return function () {
+                        return baseElementConstructor.call(this, a);
+                    };
+                })(ctor);
+                window[name] = classes.proxy(ctor, finalConstructor);
+            }
         }
 
     })();

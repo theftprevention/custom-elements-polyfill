@@ -6,7 +6,9 @@ const
  * @typedef {Object} SauceTest
  * @property {number} checkCount
  * @property {number} checkInterval
+ * @property {function} checkJob
  * @property {Array.<string>} completedJobs
+ * @property {Array.<string>} failedJobs
  * @property {object} options
  * @property {Promise} promise
  * @property {function} reject
@@ -42,6 +44,7 @@ function checkJob(test, job) {
         if (job.status) {
             console.log('Job failed: ' + job.id);
             console.log(JSON.stringify(job));
+            test.failedJobs.push(job.id);
         } else {
             console.log('Job complete: ' + job.id);
         }
@@ -85,13 +88,18 @@ function checkJobs(test) {
             return test.reject(ex);
         }
 
-        jobs.forEach(checkJob.bind(null, test));
+        jobs.forEach(test.checkJob);
 
         i = test.runningJobs.length;
         if (i === 0) {
             console.log('All jobs completed.');
             console.log();
-            test.resolve(jobs);
+            i = test.failedJobs.length;
+            if (i > 0) {
+                test.reject(new Error(i + ' job' + (i === 1 ? '' : 's') + ' failed the current build: ' + test.failedJobs.join(', ')));
+            } else {
+                test.resolve(jobs);
+            }
         } else {
             console.log(i + ' job' + (i === 1 ? ' is' : 's are') + ' still in progress.');
             console.log();
@@ -137,6 +145,8 @@ function runSauceTests(options) {
         travisBuildNumber: e.TRAVIS_BUILD_NUMBER,
         travisJobNumber: e.TRAVIS_JOB_NUMBER
     };
+
+    test.checkJob = checkJob.bind(null, test);
 
     sauce.send({
         method: 'POST',
@@ -197,4 +207,5 @@ runSauceTests({
     console.log('Sauce Labs tests complete.');
 }, function (err) {
     console.log(err);
+    process.exit(-1);
 });

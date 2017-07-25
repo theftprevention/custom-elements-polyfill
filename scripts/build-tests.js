@@ -7,16 +7,14 @@ const
 
     root = path.join(__dirname, '../');
 
-var browserify = new Browserify(path.join(root, 'test/index.js'), {
+console.log('[build-tests] Bundling tests...');
+
+new Browserify(path.join(root, 'test/index.js'), {
     noParse: [
         path.join(root, 'dist/custom-elements-polyfill.js'),
         path.join(root, 'dist/custom-elements-polyfill.min.js')
     ]
-});
-
-console.log('[build-tests] Bundling tests...');
-
-browserify.bundle(function (err1, buffer) {
+}).bundle(function (err1, buffer) {
     if (err1) {
         throw err1;
     }
