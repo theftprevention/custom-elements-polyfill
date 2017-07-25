@@ -136,6 +136,7 @@ function runSauceTests(options) {
         checkCount: 0,
         checkInterval: 10000,
         completedJobs: [],
+        failedJobs: [],
         options: options,
         promise: promise,
         reject: reject,
